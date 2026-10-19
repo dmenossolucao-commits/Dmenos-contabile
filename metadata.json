@@ -1,0 +1,6 @@
+{
+  "name": "Dmenos Contro",
+  "description": "Sistema profissional de controle financeiro diário para pequeno mercadinho, com fechamento de caixa, vales, despesas, contas bancárias e relatórios.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

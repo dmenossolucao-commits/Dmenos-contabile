@@ -1,0 +1,232 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Perfil de usuário e papel de acesso no sistema",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "employee"] },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["email", "displayName", "role", "status"]
+    },
+    "Closure": {
+      "title": "Closure",
+      "description": "Fechamento diário de caixa do mercadinho",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string" },
+        "cashierName": { "type": "string" },
+        "responsibleUid": { "type": "string" },
+        "initialCash": { "type": "number" },
+        "cashIn": { "type": "number" },
+        "pixIn": { "type": "number" },
+        "creditCardIn": { "type": "number" },
+        "debitCardIn": { "type": "number" },
+        "otherIn": { "type": "number" },
+        "otherInDescription": { "type": "string" },
+        "expensesCash": { "type": "number" },
+        "valesCash": { "type": "number" },
+        "countedCash": { "type": "number" },
+        "expectedCash": { "type": "number" },
+        "cashDifference": { "type": "number" },
+        "totalSales": { "type": "number" },
+        "status": { "type": "string", "enum": ["closed", "reopened"] },
+        "notes": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["date", "cashierName", "initialCash", "cashIn", "countedCash", "expectedCash", "status"]
+    },
+    "Expense": {
+      "title": "Expense",
+      "description": "Despesas operacionais e pagamentos",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string" },
+        "type": { "type": "string" },
+        "description": { "type": "string" },
+        "category": { "type": "string" },
+        "amount": { "type": "number" },
+        "entityName": { "type": "string" },
+        "paymentMethod": { "type": "string" },
+        "moneySource": { "type": "string" },
+        "bankAccountId": { "type": "string" },
+        "closureId": { "type": "string" },
+        "notes": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "cancelled"] },
+        "cancellationReason": { "type": "string" },
+        "cancelledBy": { "type": "string" },
+        "cancelledAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["date", "description", "category", "amount", "moneySource", "status"]
+    },
+    "Vale": {
+      "title": "Vale",
+      "description": "Controle de vales de funcionários e adiantamentos",
+      "type": "object",
+      "properties": {
+        "employeeName": { "type": "string" },
+        "amount": { "type": "number" },
+        "date": { "type": "string" },
+        "moneySource": { "type": "string" },
+        "bankAccountId": { "type": "string" },
+        "status": { "type": "string", "enum": ["pendente", "quitado", "cancelado"] },
+        "settledDate": { "type": "string" },
+        "settledMethod": { "type": "string" },
+        "settledNotes": { "type": "string" },
+        "notes": { "type": "string" },
+        "closureId": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["employeeName", "amount", "date", "moneySource", "status"]
+    },
+    "BankAccount": {
+      "title": "BankAccount",
+      "description": "Cadastro de conta bancária ou instituição financeira",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "bankName": { "type": "string" },
+        "accountType": { "type": "string" },
+        "agency": { "type": "string" },
+        "accountNumberMasked": { "type": "string" },
+        "initialBalance": { "type": "number" },
+        "initialBalanceDate": { "type": "string" },
+        "currentBalance": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["name", "bankName", "accountType", "initialBalance", "currentBalance", "status"]
+    },
+    "BankTransaction": {
+      "title": "BankTransaction",
+      "description": "Lançamento e movimentação de conta bancária",
+      "type": "object",
+      "properties": {
+        "accountId": { "type": "string" },
+        "date": { "type": "string" },
+        "description": { "type": "string" },
+        "category": { "type": "string" },
+        "amount": { "type": "number" },
+        "type": { "type": "string" },
+        "relatedAccountId": { "type": "string" },
+        "relatedTransferId": { "type": "string" },
+        "relatedClosureId": { "type": "string" },
+        "relatedExpenseId": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "cancelled"] },
+        "balanceAfter": { "type": "number" },
+        "notes": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["accountId", "date", "description", "amount", "type", "status"]
+    },
+    "Receivable": {
+      "title": "Receivable",
+      "description": "Valores a receber de operadoras de cartão de crédito e débito",
+      "type": "object",
+      "properties": {
+        "closureId": { "type": "string" },
+        "date": { "type": "string" },
+        "cardType": { "type": "string", "enum": ["credito", "debito"] },
+        "grossAmount": { "type": "number" },
+        "feePercentage": { "type": "number" },
+        "feeAmount": { "type": "number" },
+        "netAmount": { "type": "number" },
+        "targetAccountId": { "type": "string" },
+        "expectedCreditDate": { "type": "string" },
+        "status": { "type": "string", "enum": ["pendente", "creditado", "cancelado"] },
+        "creditedDate": { "type": "string" },
+        "creditedTransactionId": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["closureId", "date", "cardType", "grossAmount", "netAmount", "status"]
+    },
+    "CalendarNote": {
+      "title": "CalendarNote",
+      "description": "Anotação e compromisso financeiro do calendário",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "date": { "type": "string" },
+        "time": { "type": "string" },
+        "category": { "type": "string" },
+        "reminder": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["pendente", "concluida"] },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["title", "date", "category", "status"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Registro de auditoria e rastreabilidade de operações financeiras",
+      "type": "object",
+      "properties": {
+        "action": { "type": "string" },
+        "entityType": { "type": "string" },
+        "entityId": { "type": "string" },
+        "details": { "type": "string" },
+        "userUid": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["action", "entityType", "entityId", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Documento de perfil de usuário com nível de acesso"
+    },
+    "/closures/{closureId}": {
+      "schema": "Closure",
+      "description": "Fechamentos diários de caixa com valores contados, esperados e diferenças"
+    },
+    "/expenses/{expenseId}": {
+      "schema": "Expense",
+      "description": "Despesas operacionais e pagamentos por categoria e origem de recurso"
+    },
+    "/vales/{valeId}": {
+      "schema": "Vale",
+      "description": "Vales e adiantamentos a funcionários com controle de quitação"
+    },
+    "/bank_accounts/{accountId}": {
+      "schema": "BankAccount",
+      "description": "Contas bancárias cadastradas com saldo de abertura e saldo atual"
+    },
+    "/bank_transactions/{transactionId}": {
+      "schema": "BankTransaction",
+      "description": "Movimentações bancárias individuais (depósitos, saques, transferências)"
+    },
+    "/receivables/{receivableId}": {
+      "schema": "Receivable",
+      "description": "Controle de cartões a receber, taxas e créditos em conta"
+    },
+    "/calendar_notes/{noteId}": {
+      "schema": "CalendarNote",
+      "description": "Anotações e lembretes financeiros do calendário"
+    },
+    "/audit_logs/{logId}": {
+      "schema": "AuditLog",
+      "description": "Rastreabilidade de alterações, estornos e reaberturas"
+    }
+  }
+}

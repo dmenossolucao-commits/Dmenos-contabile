@@ -1,0 +1,55 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Internal server-only collections (NEVER readable or writable from client)
+    match /system_users/{docId} {
+      allow read, write: if false;
+    }
+    match /user_sessions/{docId} {
+      allow read, write: if false;
+    }
+
+    // Financial collections accessible by the Dmenos Contro application
+    match /closures/{closureId} {
+      allow read, write: if true;
+    }
+
+    match /expenses/{expenseId} {
+      allow read, write: if true;
+    }
+
+    match /vales/{valeId} {
+      allow read, write: if true;
+    }
+
+    match /bank_accounts/{accountId} {
+      allow read, write: if true;
+    }
+
+    match /bank_transactions/{transactionId} {
+      allow read, write: if true;
+    }
+
+    match /receivables/{receivableId} {
+      allow read, write: if true;
+    }
+
+    match /calendar_notes/{noteId} {
+      allow read, write: if true;
+    }
+
+    match /audit_logs/{logId} {
+      allow read, write: if true;
+    }
+
+    match /test/{docId} {
+      allow read, write: if true;
+    }
+
+    // Default catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
