@@ -138,6 +138,33 @@ export interface Vale {
   updatedAt: string;
 }
 
+export type BoletoStatus = 'pendente' | 'pago' | 'cancelado';
+
+export interface Boleto {
+  id: string;
+  dueDate: string; // YYYY-MM-DD Data de vencimento
+  beneficiary: string; // Fornecedor / Cedente
+  description: string; // Descrição do boleto/serviço
+  amount: number; // Valor R$
+  category: string; // Categoria
+  barcode?: string; // Código de barras / Linha digitável
+  status: BoletoStatus;
+  notes?: string;
+  bankAccountId?: string; // Conta bancária prevista para pagamento
+  bankAccountName?: string;
+  paidDate?: string;
+  paidAmount?: number;
+  paidVia?: 'caixa' | 'banco';
+  paidBankAccountId?: string;
+  paidBankAccountName?: string;
+  relatedExpenseId?: string;
+  relatedTransactionId?: string;
+  cancellationReason?: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type BankAccountType = 'corrente' | 'poupanca' | 'pagamento' | 'investimento';
 
 export interface BankAccount {
@@ -235,7 +262,7 @@ export interface CalendarNote {
 export interface AuditLog {
   id: string;
   action: 'create' | 'update' | 'cancel' | 'reopen' | 'settle' | 'delete' | 'login' | 'password_reset';
-  entityType: 'closure' | 'expense' | 'vale' | 'bank_account' | 'bank_transaction' | 'receivable' | 'calendar_note' | 'user' | 'auth' | 'audit_log';
+  entityType: 'closure' | 'expense' | 'vale' | 'boleto' | 'bank_account' | 'bank_transaction' | 'receivable' | 'calendar_note' | 'user' | 'auth' | 'audit_log';
   entityId: string;
   details: string;
   userUid: string;

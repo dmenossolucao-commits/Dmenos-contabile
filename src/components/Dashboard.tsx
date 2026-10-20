@@ -22,7 +22,9 @@ import {
   ChevronRight,
   Wallet,
   CreditCard,
-  QrCode
+  QrCode,
+  BellRing,
+  Barcode
 } from 'lucide-react';
 
 interface DashboardProps {
@@ -42,10 +44,29 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onNewVale,
   onNewBankTransaction,
 }) => {
-  const { closures, expenses, vales, bankAccounts, bankTransactions, calendarNotes } = useFinance();
+  const { closures, expenses, vales, boletos = [], bankAccounts, bankTransactions, calendarNotes } = useFinance();
   const { currentUser, isAdmin } = useAuth();
 
   const [period, setPeriod] = useState<PeriodFilter>('month');
+
+  // Boletos Due Date Alert for Dashboard
+  const pendingBoletosAlert = useMemo(() => {
+    const today = getTodayDateBR();
+    const active = boletos.filter((b) => b.status === 'pendente');
+    const overdue = active.filter((b) => b.dueDate < today);
+    const dueToday = active.filter((b) => b.dueDate === today);
+    const overdueTotal = overdue.reduce((sum, b) => sum + Number(b.amount), 0);
+    const dueTodayTotal = dueToday.reduce((sum, b) => sum + Number(b.amount), 0);
+
+    return {
+      hasAlerts: overdue.length > 0 || dueToday.length > 0,
+      overdueCount: overdue.length,
+      overdueTotal,
+      dueTodayCount: dueToday.length,
+      dueTodayTotal,
+      totalCount: overdue.length + dueToday.length,
+    };
+  }, [boletos]);
 
   // Compute date ranges based on period
   const dateRange = useMemo(() => {
@@ -209,6 +230,47 @@ export const Dashboard: React.FC<DashboardProps> = ({
           })}
         </div>
       </div>
+
+      {/* AVISO DE VENCIMENTO DE BOLETOS NO DASHBOARD */}
+      {pendingBoletosAlert.hasAlerts && (
+        <div className="bg-gradient-to-r from-amber-500/15 via-rose-500/10 to-amber-500/10 border border-amber-300/80 rounded-2xl p-4 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-in fade-in">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-amber-500 text-white shadow-xs shrink-0">
+              <BellRing className="w-5 h-5 animate-bounce" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-xs font-black uppercase tracking-wider text-slate-900">
+                  Aviso de Vencimento de Boletos
+                </h3>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-600 text-white">
+                  {pendingBoletosAlert.totalCount} pendência(s)
+                </span>
+              </div>
+              <p className="text-xs text-slate-700 mt-0.5">
+                {pendingBoletosAlert.overdueCount > 0 && (
+                  <span className="text-rose-700 font-bold mr-2">
+                    🔴 {pendingBoletosAlert.overdueCount} vencido(s) ({formatCurrency(pendingBoletosAlert.overdueTotal)})
+                  </span>
+                )}
+                {pendingBoletosAlert.dueTodayCount > 0 && (
+                  <span className="text-amber-800 font-bold">
+                    🟠 {pendingBoletosAlert.dueTodayCount} vence(m) hoje ({formatCurrency(pendingBoletosAlert.dueTodayTotal)})
+                  </span>
+                )}
+              </p>
+            </div>
+          </div>
+
+          <button
+            onClick={() => onNavigate('despesas')}
+            className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition shadow-xs flex items-center gap-1.5 cursor-pointer self-start sm:self-auto"
+          >
+            <Barcode className="w-4 h-4 text-amber-300" />
+            <span>Ver Boletos</span>
+          </button>
+        </div>
+      )}
 
       {/* Main Stats Cards Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

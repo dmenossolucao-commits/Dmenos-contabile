@@ -73,7 +73,7 @@ function MainLayout() {
       list.push({ id: 'fechamento', label: 'Fechamento Diário', icon: FileSpreadsheet });
     }
     if (permissions.canManageExpenses || permissions.canManageVales) {
-      list.push({ id: 'despesas', label: 'Despesas & Vales', icon: TrendingDown });
+      list.push({ id: 'despesas', label: 'Saídas: Despesas, Vales & Boletos', icon: TrendingDown });
     }
     if (permissions.canManageBankAccounts) {
       list.push({ id: 'bancos', label: 'Contas Bancárias', icon: Landmark });

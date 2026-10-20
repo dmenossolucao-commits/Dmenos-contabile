@@ -20,6 +20,7 @@ import {
   DailyClosure,
   Expense,
   Vale,
+  Boleto,
   BankAccount,
   BankTransaction,
   Receivable,
@@ -33,6 +34,7 @@ interface FinanceContextType {
   closures: DailyClosure[];
   expenses: Expense[];
   vales: Vale[];
+  boletos: Boleto[];
   bankAccounts: BankAccount[];
   bankTransactions: BankTransaction[];
   receivables: Receivable[];
@@ -60,6 +62,20 @@ interface FinanceContextType {
   settleVale: (valeId: string, method: string, notes?: string) => Promise<void>;
   cancelVale: (valeId: string, reason: string) => Promise<void>;
 
+  createBoleto: (data: Omit<Boleto, 'id' | 'createdAt' | 'updatedAt' | 'createdBy' | 'status'>) => Promise<string>;
+  payBoleto: (
+    boletoId: string,
+    payment: {
+      paidDate: string;
+      paidAmount: number;
+      paidVia: 'caixa' | 'banco';
+      paidBankAccountId?: string;
+      notes?: string;
+    }
+  ) => Promise<void>;
+  cancelBoleto: (boletoId: string, reason: string) => Promise<void>;
+  deleteBoleto: (boletoId: string, reason?: string) => Promise<void>;
+
   createBankAccount: (data: Omit<BankAccount, 'id' | 'createdAt' | 'updatedAt' | 'currentBalance'>) => Promise<string>;
   updateBankAccount: (id: string, data: Partial<BankAccount>) => Promise<void>;
   createBankTransaction: (data: Omit<BankTransaction, 'id' | 'createdAt' | 'createdBy' | 'balanceAfter'>) => Promise<string>;
@@ -83,6 +99,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [closures, setClosures] = useState<DailyClosure[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [vales, setVales] = useState<Vale[]>([]);
+  const [boletos, setBoletos] = useState<Boleto[]>([]);
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [bankTransactions, setBankTransactions] = useState<BankTransaction[]>([]);
   const [receivables, setReceivables] = useState<Receivable[]>([]);
@@ -215,6 +232,16 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
       (error) => handleFirestoreError(error, OperationType.GET, 'vales')
     );
 
+    const unsubBoletos = onSnapshot(
+      collection(db, 'boletos'),
+      (snapshot) => {
+        const items = snapshot.docs.map((d) => d.data() as Boleto);
+        items.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+        setBoletos(items);
+      },
+      (error) => handleFirestoreError(error, OperationType.GET, 'boletos')
+    );
+
     const unsubAccounts = onSnapshot(
       collection(db, 'bank_accounts'),
       (snapshot) => {
@@ -284,6 +311,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
       unsubClosures();
       unsubExpenses();
       unsubVales();
+      unsubBoletos();
       unsubAccounts();
       unsubTransactions();
       unsubReceivables();
@@ -672,6 +700,154 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
       await logAudit('cancel', 'vale', valeId, `Vale ${valeId} cancelado. Motivo: ${reason}`);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `vales/${valeId}`);
+    }
+  };
+
+  // 8b. BOLETOS COM AVISO DE VENCIMENTO
+  const createBoleto = async (
+    data: Omit<Boleto, 'id' | 'createdAt' | 'updatedAt' | 'createdBy' | 'status'>
+  ): Promise<string> => {
+    const id = `bol_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const now = new Date().toISOString();
+    try {
+      const newBoleto: Boleto = {
+        ...data,
+        id,
+        status: 'pendente',
+        createdBy: currentUser?.displayName || currentUser?.username || 'Responsável',
+        createdAt: now,
+        updatedAt: now,
+      };
+      await setDoc(doc(db, 'boletos', id), newBoleto);
+      await logAudit(
+        'create',
+        'boleto',
+        id,
+        `Boleto lançado: "${data.description}" (${data.beneficiary}) - R$ ${Number(data.amount).toFixed(2)}, vencimento ${data.dueDate}`
+      );
+      return id;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `boletos/${id}`);
+    }
+  };
+
+  const payBoleto = async (
+    boletoId: string,
+    payment: {
+      paidDate: string;
+      paidAmount: number;
+      paidVia: 'caixa' | 'banco';
+      paidBankAccountId?: string;
+      notes?: string;
+    }
+  ): Promise<void> => {
+    const now = new Date().toISOString();
+    try {
+      const bolDoc = await getDoc(doc(db, 'boletos', boletoId));
+      if (!bolDoc.exists()) throw new Error('Boleto não encontrado');
+      const bolData = bolDoc.data() as Boleto;
+
+      let relatedTransactionId: string | undefined;
+      let relatedExpenseId: string | undefined;
+      let bankAccName = '';
+
+      if (payment.paidVia === 'banco' && payment.paidBankAccountId) {
+        const acc = bankAccounts.find((a) => a.id === payment.paidBankAccountId);
+        bankAccName = acc?.name || '';
+        relatedTransactionId = `btx_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+        const trans: BankTransaction = {
+          id: relatedTransactionId,
+          accountId: payment.paidBankAccountId,
+          date: payment.paidDate,
+          description: `Pagamento Boleto: ${bolData.beneficiary} - ${bolData.description}`,
+          category: bolData.category || 'Boleto / Fornecedor',
+          amount: -Math.abs(payment.paidAmount),
+          type: 'pagamento',
+          status: 'active',
+          notes: payment.notes || `Boleto ${bolData.barcode ? `Código: ${bolData.barcode}` : ''}`,
+          createdBy: currentUser?.id || '',
+          createdAt: now,
+        };
+        await setDoc(doc(db, 'bank_transactions', relatedTransactionId), trans);
+        await syncAccountBalance(payment.paidBankAccountId);
+      } else {
+        // Caixa físico
+        relatedExpenseId = `exp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+        const newExpense: Expense = {
+          id: relatedExpenseId,
+          date: payment.paidDate,
+          type: 'despesa',
+          description: `Boleto: ${bolData.beneficiary} - ${bolData.description}`,
+          category: bolData.category || 'Boleto / Fornecedor',
+          amount: payment.paidAmount,
+          entityName: bolData.beneficiary,
+          paymentMethod: 'boleto',
+          moneySource: 'caixa',
+          notes: payment.notes || `Boleto ${boletoId} pago via caixa`,
+          status: 'active',
+          createdBy: currentUser?.displayName || currentUser?.username || 'Responsável',
+          createdAt: now,
+          updatedAt: now,
+        };
+        await setDoc(doc(db, 'expenses', relatedExpenseId), newExpense);
+      }
+
+      await updateDoc(doc(db, 'boletos', boletoId), {
+        status: 'pago',
+        paidDate: payment.paidDate,
+        paidAmount: payment.paidAmount,
+        paidVia: payment.paidVia,
+        paidBankAccountId: payment.paidBankAccountId || null,
+        paidBankAccountName: bankAccName || null,
+        relatedTransactionId: relatedTransactionId || null,
+        relatedExpenseId: relatedExpenseId || null,
+        notes: payment.notes ? `${bolData.notes || ''} [Pagamento: ${payment.notes}]`.trim() : bolData.notes || null,
+        updatedAt: now,
+      });
+
+      await logAudit(
+        'settle',
+        'boleto',
+        boletoId,
+        `Boleto "${bolData.description}" (${bolData.beneficiary}) de R$ ${payment.paidAmount.toFixed(2)} liquidado via ${
+          payment.paidVia === 'banco' ? `Banco (${bankAccName})` : 'Caixa Físico'
+        }.`
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `boletos/${boletoId}`);
+    }
+  };
+
+  const cancelBoleto = async (boletoId: string, reason: string): Promise<void> => {
+    const now = new Date().toISOString();
+    try {
+      await updateDoc(doc(db, 'boletos', boletoId), {
+        status: 'cancelado',
+        cancellationReason: reason,
+        updatedAt: now,
+      });
+      await logAudit('cancel', 'boleto', boletoId, `Boleto ${boletoId} cancelado. Motivo: ${reason}`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `boletos/${boletoId}`);
+    }
+  };
+
+  const deleteBoleto = async (boletoId: string, reason?: string): Promise<void> => {
+    try {
+      const bolDoc = await getDoc(doc(db, 'boletos', boletoId));
+      const bolData = bolDoc.exists() ? (bolDoc.data() as Boleto) : null;
+      await deleteDoc(doc(db, 'boletos', boletoId));
+      setBoletos((prev) => prev.filter((b) => b.id !== boletoId));
+      await logAudit(
+        'delete',
+        'boleto',
+        boletoId,
+        `Boleto ${bolData ? `"${bolData.description}" (${bolData.beneficiary})` : boletoId} excluído.${
+          reason ? ` Motivo: ${reason}` : ''
+        }`
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `boletos/${boletoId}`);
     }
   };
 
@@ -1178,6 +1354,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         closures,
         expenses,
         vales,
+        boletos,
         bankAccounts: computedBankAccounts,
         bankTransactions,
         receivables,
@@ -1197,6 +1374,10 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         createVale,
         settleVale,
         cancelVale,
+        createBoleto,
+        payBoleto,
+        cancelBoleto,
+        deleteBoleto,
         createBankAccount,
         updateBankAccount,
         createBankTransaction,

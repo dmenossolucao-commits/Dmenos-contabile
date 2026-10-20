@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useFinance } from '../context/FinanceContext';
 import { CalendarNote, CalendarCategory } from '../types';
-import { formatDateBR, getTodayDateBR } from '../utils/formatters';
+import { formatDateBR, getTodayDateBR, formatCurrency } from '../utils/formatters';
 import {
   Calendar as CalendarIcon,
   PlusCircle,
@@ -13,7 +13,8 @@ import {
   ChevronRight,
   Tag,
   AlertCircle,
-  X
+  X,
+  Barcode
 } from 'lucide-react';
 
 const CATEGORIES: { key: CalendarCategory; label: string; color: string }[] = [
@@ -27,7 +28,7 @@ const CATEGORIES: { key: CalendarCategory; label: string; color: string }[] = [
 ];
 
 export const CalendarView: React.FC = () => {
-  const { calendarNotes, createCalendarNote, toggleCalendarNoteStatus, deleteCalendarNote } = useFinance();
+  const { calendarNotes, boletos = [], createCalendarNote, toggleCalendarNoteStatus, deleteCalendarNote } = useFinance();
 
   const todayStr = getTodayDateBR();
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -73,10 +74,25 @@ export const CalendarView: React.FC = () => {
     return map;
   }, [calendarNotes]);
 
-  // Notes for selected day
+  // Group boletos by date
+  const boletosByDate = useMemo(() => {
+    const map = new Map<string, typeof boletos>();
+    boletos.forEach((b) => {
+      const existing = map.get(b.dueDate) || [];
+      existing.push(b);
+      map.set(b.dueDate, existing);
+    });
+    return map;
+  }, [boletos]);
+
+  // Notes and boletos for selected day
   const selectedDayNotes = useMemo(() => {
     return notesByDate.get(selectedDateStr) || [];
   }, [notesByDate, selectedDateStr]);
+
+  const selectedDayBoletos = useMemo(() => {
+    return boletosByDate.get(selectedDateStr) || [];
+  }, [boletosByDate, selectedDateStr]);
 
   const handleOpenNewNote = (dStr?: string) => {
     setNoteDate(dStr || selectedDateStr);
@@ -197,8 +213,10 @@ export const CalendarView: React.FC = () => {
               const dayNum = i + 1;
               const dStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
               const dayNotes = notesByDate.get(dStr) || [];
+              const dayBoletos = boletosByDate.get(dStr) || [];
               const isSelected = selectedDateStr === dStr;
               const isToday = todayStr === dStr;
+              const totalItems = dayNotes.length + dayBoletos.length;
 
               return (
                 <div
@@ -225,16 +243,29 @@ export const CalendarView: React.FC = () => {
                       {dayNum}
                     </span>
 
-                    {dayNotes.length > 0 && (
+                    {totalItems > 0 && (
                       <span className="text-[10px] font-bold px-1 rounded-full bg-emerald-100 text-emerald-800">
-                        {dayNotes.length}
+                        {totalItems}
                       </span>
                     )}
                   </div>
 
-                  {/* Note tags snippet */}
+                  {/* Note tags and Boleto snippet */}
                   <div className="space-y-0.5 overflow-hidden">
-                    {dayNotes.slice(0, 2).map((n) => (
+                    {dayBoletos.slice(0, 1).map((b) => (
+                      <div
+                        key={b.id}
+                        className={`text-[9px] truncate px-1 rounded-sm font-bold flex items-center gap-0.5 ${
+                          b.status === 'pago'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-amber-100 text-amber-900 border border-amber-300'
+                        }`}
+                      >
+                        <Barcode className="w-2.5 h-2.5 shrink-0" />
+                        <span className="truncate">{b.beneficiary}</span>
+                      </div>
+                    ))}
+                    {dayNotes.slice(0, dayBoletos.length > 0 ? 1 : 2).map((n) => (
                       <div
                         key={n.id}
                         className={`text-[9px] truncate px-1 rounded-sm font-medium ${
@@ -246,9 +277,9 @@ export const CalendarView: React.FC = () => {
                         {n.title}
                       </div>
                     ))}
-                    {dayNotes.length > 2 && (
+                    {totalItems > 2 && (
                       <span className="text-[9px] text-slate-400 font-semibold pl-1">
-                        +{dayNotes.length - 2} mais
+                        +{totalItems - 2} mais
                       </span>
                     )}
                   </div>
@@ -275,8 +306,48 @@ export const CalendarView: React.FC = () => {
               </button>
             </div>
 
+            {/* Boletos com vencimento neste dia */}
+            {selectedDayBoletos.length > 0 && (
+              <div className="space-y-2 mb-4 pt-2 border-t border-slate-100">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800">
+                  <Barcode className="w-3.5 h-3.5 text-amber-600" />
+                  <span>Boletos com Vencimento nesta Data ({selectedDayBoletos.length})</span>
+                </div>
+                {selectedDayBoletos.map((b) => (
+                  <div
+                    key={b.id}
+                    className="p-3 rounded-xl border border-amber-200 bg-amber-50/40 flex justify-between items-start gap-2 text-xs"
+                  >
+                    <div>
+                      <span className="font-bold text-slate-900 block">{b.beneficiary}</span>
+                      <span className="text-[11px] text-slate-500">{b.description}</span>
+                      {b.barcode && (
+                        <span className="text-[10px] font-mono text-slate-400 block truncate max-w-[180px]">
+                          {b.barcode}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-right shrink-0">
+                      <span className="font-black text-rose-600 block">
+                        {formatCurrency(b.amount)}
+                      </span>
+                      <span
+                        className={`inline-block px-2 py-0.5 rounded-full text-[9px] font-bold ${
+                          b.status === 'pago'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-amber-100 text-amber-800 border border-amber-300'
+                        }`}
+                      >
+                        {b.status === 'pago' ? 'Pago' : 'Aguardando'}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {/* List of notes for selected day */}
-            <div className="space-y-3 mt-4">
+            <div className="space-y-3 mt-2">
               {selectedDayNotes.length > 0 ? (
                 selectedDayNotes.map((note) => {
                   const isDone = note.status === 'concluida';

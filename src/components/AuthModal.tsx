@@ -9,7 +9,11 @@ import {
   Eye,
   EyeOff,
   UserPlus,
-  CheckCircle2
+  CheckCircle2,
+  KeyRound,
+  ArrowLeft,
+  RefreshCw,
+  WifiOff
 } from 'lucide-react';
 
 interface AuthModalProps {
@@ -17,8 +21,16 @@ interface AuthModalProps {
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
-  const { login, setupInitialAdmin, needsInitialSetup } = useAuth();
+  const {
+    login,
+    setupInitialAdmin,
+    resetAdminPassword,
+    needsInitialSetup,
+    connectionError,
+    retryConnection
+  } = useAuth();
 
+  const [isResetMode, setIsResetMode] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -27,8 +39,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const [loading, setLoading] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+
+  const handleRetry = async () => {
+    setRetrying(true);
+    try {
+      await retryConnection();
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -83,6 +105,38 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
     }
   };
 
+  const handleResetSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg('');
+    setSuccessMsg('');
+
+    if (!username.trim()) {
+      setErrorMsg('Informe o nome de usuário do Administrador.');
+      return;
+    }
+
+    if (password.length < 6) {
+      setErrorMsg('A nova senha deve conter no mínimo 6 caracteres.');
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      setErrorMsg('A confirmação da senha não confere com a nova senha digitada.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await resetAdminPassword(username.trim(), password);
+      setSuccessMsg('Senha do Administrador redefinida com sucesso! Entrando no sistema...');
+      if (onSuccess) onSuccess();
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Erro ao redefinir senha do administrador.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-emerald-950/85 backdrop-blur-md p-4 overflow-y-auto">
       <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl border border-emerald-900/10 overflow-hidden my-8 animate-in fade-in zoom-in-95 duration-200">
@@ -92,216 +146,388 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
           <div className="absolute -bottom-8 -left-8 w-32 h-32 bg-emerald-500/10 rounded-full blur-xl" />
 
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-emerald-800/80 border border-amber-400/40 text-amber-300 shadow-inner mb-3">
-            <ShieldCheck className="w-9 h-9" />
+            {connectionError ? <WifiOff className="w-9 h-9 text-rose-300" /> : <ShieldCheck className="w-9 h-9" />}
           </div>
           <h1 className="text-2xl font-black tracking-tight text-white">DMENOS CONTRO</h1>
           <p className="text-xs text-amber-300 font-semibold tracking-wider uppercase mt-1">
             Sistema de Controle Financeiro
           </p>
           <p className="text-xs text-slate-300 mt-2">
-            {needsInitialSetup
+            {connectionError
+              ? 'Problema de Conexão com o Banco de Dados'
+              : needsInitialSetup
               ? 'Primeiro Acesso — Configuração Inicial do Administrador'
+              : isResetMode
+              ? 'Redefinir Acesso do Administrador'
               : 'Acesso autenticado por Usuário e Senha'}
           </p>
         </div>
 
         <div className="p-6 sm:p-8">
-          {errorMsg && (
-            <div className="mb-5 flex items-start gap-2.5 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs leading-relaxed">
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-              <span>{errorMsg}</span>
+          {/* Connection Error Banner */}
+          {connectionError && (
+            <div className="mb-6 p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 text-xs leading-relaxed space-y-3">
+              <div className="flex items-start gap-2.5">
+                <AlertCircle className="w-5 h-5 shrink-0 text-rose-600 mt-0.5" />
+                <div>
+                  <strong className="block font-bold text-rose-950 mb-1">
+                    Falha na Verificação do Administrador
+                  </strong>
+                  <span>{connectionError}</span>
+                </div>
+              </div>
+              <p className="text-[11px] text-rose-700">
+                O sistema não considerou o banco como vazio para proteger a integridade dos dados existentes.
+              </p>
+              <button
+                type="button"
+                onClick={handleRetry}
+                disabled={retrying}
+                className="w-full py-2.5 px-3 rounded-xl bg-rose-700 hover:bg-rose-800 text-white font-semibold text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-sm"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${retrying ? 'animate-spin' : ''}`} />
+                <span>{retrying ? 'Reconectando...' : 'Tentar Conectar Novamente'}</span>
+              </button>
             </div>
           )}
 
-          {successMsg && (
+          {!connectionError && errorMsg && (
+            <div className="mb-5 flex flex-col gap-1.5 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs leading-relaxed">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
+                <span className="font-semibold">{errorMsg}</span>
+              </div>
+              {!isResetMode && !needsInitialSetup && (
+                <p className="text-[11px] text-slate-600 pl-6 mt-1">
+                  Se você precisa redefinir suas credenciais de administrador, clique em{' '}
+                  <strong
+                    onClick={() => {
+                      setIsResetMode(true);
+                      setErrorMsg('');
+                    }}
+                    className="text-emerald-800 underline cursor-pointer hover:text-emerald-950"
+                  >
+                    Redefinir Senha do Administrador
+                  </strong>
+                  .
+                </p>
+              )}
+            </div>
+          )}
+
+          {!connectionError && successMsg && (
             <div className="mb-5 flex items-start gap-2.5 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs leading-relaxed">
               <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
               <span>{successMsg}</span>
             </div>
           )}
 
-          {needsInitialSetup ? (
-            /* INITIAL ADMIN SETUP FORM */
-            <form onSubmit={handleSetupSubmit} className="space-y-4">
-              <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs leading-relaxed">
-                <strong className="block font-bold mb-0.5 text-amber-950">
-                  Configuração Inicial de Segurança
-                </strong>
-                Nenhum administrador está cadastrado ainda. Defina agora o nome de usuário e a senha principal do administrador para ativar o sistema.
-              </div>
+          {!connectionError && (
+            <>
+              {needsInitialSetup ? (
+                /* INITIAL ADMIN SETUP FORM */
+                <form onSubmit={handleSetupSubmit} className="space-y-4">
+                  <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs leading-relaxed">
+                    <strong className="block font-bold mb-0.5 text-amber-950">
+                      Configuração Única do Administrador
+                    </strong>
+                    Nenhum administrador está cadastrado no banco compartilhado. Cadastre o usuário e a senha principais agora. Esta etapa é executada uma única vez.
+                  </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Nome do Administrador
-                </label>
-                <div className="relative">
-                  <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
-                  <input
-                    type="text"
-                    required
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    placeholder="Ex: Gerente Geral / Administrador"
-                    className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:border-transparent text-slate-800"
-                  />
-                </div>
-              </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Nome do Administrador
+                    </label>
+                    <div className="relative">
+                      <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+                      <input
+                        type="text"
+                        required
+                        value={displayName}
+                        onChange={(e) => setDisplayName(e.target.value)}
+                        placeholder="Ex: Gerente Geral / Administrador"
+                        className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:border-transparent text-slate-800"
+                      />
+                    </div>
+                  </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Nome de Usuário (Login) *
-                </label>
-                <div className="relative">
-                  <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
-                  <input
-                    type="text"
-                    required
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    placeholder="Ex: admin"
-                    className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:border-transparent text-slate-800 lowercase"
-                  />
-                </div>
-                <span className="text-[10px] text-slate-400 mt-1 block">
-                  Utilize letras e números sem espaços.
-                </span>
-              </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Nome de Usuário (Login) *
+                    </label>
+                    <div className="relative">
+                      <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+                      <input
+                        type="text"
+                        required
+                        value={username}
+                        onChange={(e) => setUsername(e.target.value)}
+                        placeholder="Ex: admin"
+                        className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:border-transparent text-slate-800 lowercase"
+                      />
+                    </div>
+                    <span className="text-[10px] text-slate-400 mt-1 block">
+                      Utilize letras e números sem espaços.
+                    </span>
+                  </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Senha do Administrador *
-                </label>
-                <div className="relative">
-                  <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Mínimo 6 caracteres"
-                    className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:border-transparent text-slate-800"
-                  />
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Senha do Administrador *
+                    </label>
+                    <div className="relative">
+                      <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        required
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="Mínimo 6 caracteres"
+                        className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:border-transparent text-slate-800"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-3 top-3 text-slate-400 hover:text-slate-600 transition"
+                        title={showPassword ? 'Ocultar senha' : 'Exibir senha'}
+                      >
+                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Confirmar Senha *
+                    </label>
+                    <div className="relative">
+                      <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+                      <input
+                        type={showConfirmPassword ? 'text' : 'password'}
+                        required
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        placeholder="Repita a senha"
+                        className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:border-transparent text-slate-800"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                        className="absolute right-3 top-3 text-slate-400 hover:text-slate-600 transition"
+                        title={showConfirmPassword ? 'Ocultar senha' : 'Exibir senha'}
+                      >
+                        {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
                   <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-3 text-slate-400 hover:text-slate-600 transition"
-                    title={showPassword ? 'Ocultar senha' : 'Exibir senha'}
+                    type="submit"
+                    disabled={loading}
+                    className="w-full py-3 px-4 rounded-xl bg-emerald-800 hover:bg-emerald-900 active:scale-[0.99] text-white font-bold text-sm transition shadow-md hover:shadow-lg flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 mt-2"
                   >
-                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    {loading ? (
+                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    ) : (
+                      <>
+                        <UserPlus className="w-4 h-4 text-amber-300" />
+                        <span>Criar Administrador e Iniciar</span>
+                      </>
+                    )}
                   </button>
-                </div>
-              </div>
+                </form>
+              ) : isResetMode ? (
+                /* RESET ADMIN PASSWORD FORM */
+                <form onSubmit={handleResetSubmit} className="space-y-4">
+                  <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-950 text-xs leading-relaxed">
+                    <strong className="block font-bold text-emerald-900 mb-0.5">
+                      Redefinição Segura de Administrador
+                    </strong>
+                    Defina um novo usuário e senha para o Administrador principal. O registro será gravado no banco compartilhado e você entrará diretamente no sistema.
+                  </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Confirmar Senha *
-                </label>
-                <div className="relative">
-                  <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
-                  <input
-                    type={showConfirmPassword ? 'text' : 'password'}
-                    required
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    placeholder="Repita a senha"
-                    className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:border-transparent text-slate-800"
-                  />
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Usuário do Administrador *
+                    </label>
+                    <div className="relative">
+                      <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+                      <input
+                        type="text"
+                        required
+                        value={username}
+                        onChange={(e) => setUsername(e.target.value)}
+                        placeholder="Ex: admin"
+                        className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:border-transparent text-slate-800 lowercase"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Nova Senha *
+                    </label>
+                    <div className="relative">
+                      <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        required
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="Mínimo 6 caracteres"
+                        className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:border-transparent text-slate-800"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-3 top-3 text-slate-400 hover:text-slate-600 transition"
+                        title={showPassword ? 'Ocultar senha' : 'Exibir senha'}
+                      >
+                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Confirmar Nova Senha *
+                    </label>
+                    <div className="relative">
+                      <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+                      <input
+                        type={showConfirmPassword ? 'text' : 'password'}
+                        required
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        placeholder="Repita a nova senha"
+                        className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:border-transparent text-slate-800"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                        className="absolute right-3 top-3 text-slate-400 hover:text-slate-600 transition"
+                        title={showConfirmPassword ? 'Ocultar senha' : 'Exibir senha'}
+                      >
+                        {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsResetMode(false);
+                        setErrorMsg('');
+                      }}
+                      className="w-1/3 py-2.5 px-3 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold text-xs transition flex items-center justify-center gap-1 cursor-pointer"
+                    >
+                      <ArrowLeft className="w-3.5 h-3.5" />
+                      <span>Voltar</span>
+                    </button>
+
+                    <button
+                      type="submit"
+                      disabled={loading}
+                      className="w-2/3 py-2.5 px-3 rounded-xl bg-emerald-800 hover:bg-emerald-900 text-white font-bold text-xs transition shadow-md flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    >
+                      {loading ? (
+                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      ) : (
+                        <>
+                          <KeyRound className="w-3.5 h-3.5 text-amber-300" />
+                          <span>Salvar e Entrar</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                /* STANDARD LOGIN FORM */
+                <form onSubmit={handleLoginSubmit} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                      Nome de Usuário
+                    </label>
+                    <div className="relative">
+                      <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+                      <input
+                        type="text"
+                        required
+                        autoFocus
+                        value={username}
+                        onChange={(e) => setUsername(e.target.value)}
+                        placeholder="Seu usuário (ex: admin)"
+                        className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:border-transparent text-slate-800 lowercase"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between items-center mb-1.5">
+                      <label className="text-xs font-semibold text-slate-700">Senha</label>
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="text-xs text-slate-500 hover:text-slate-800 flex items-center gap-1 cursor-pointer"
+                      >
+                        {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        <span>{showPassword ? 'Ocultar senha' : 'Ver senha'}</span>
+                      </button>
+                    </div>
+                    <div className="relative">
+                      <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        required
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="••••••••"
+                        className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:border-transparent text-slate-800"
+                      />
+                    </div>
+                  </div>
+
                   <button
-                    type="button"
-                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                    className="absolute right-3 top-3 text-slate-400 hover:text-slate-600 transition"
-                    title={showConfirmPassword ? 'Ocultar senha' : 'Exibir senha'}
+                    type="submit"
+                    disabled={loading}
+                    className="w-full py-3 px-4 rounded-xl bg-emerald-800 hover:bg-emerald-900 active:scale-[0.99] text-white font-bold text-sm transition shadow-md hover:shadow-lg flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 mt-3"
                   >
-                    {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    {loading ? (
+                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    ) : (
+                      <>
+                        <span>Entrar no Sistema</span>
+                        <ArrowRight className="w-4 h-4 text-amber-300" />
+                      </>
+                    )}
                   </button>
-                </div>
-              </div>
 
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full py-3 px-4 rounded-xl bg-emerald-800 hover:bg-emerald-900 active:scale-[0.99] text-white font-bold text-sm transition shadow-md hover:shadow-lg flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 mt-2"
-              >
-                {loading ? (
-                  <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                ) : (
-                  <>
-                    <UserPlus className="w-4 h-4 text-amber-300" />
-                    <span>Criar Administrador e Iniciar</span>
-                  </>
-                )}
-              </button>
-            </form>
-          ) : (
-            /* STANDARD LOGIN FORM */
-            <form onSubmit={handleLoginSubmit} className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Nome de Usuário
-                </label>
-                <div className="relative">
-                  <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
-                  <input
-                    type="text"
-                    required
-                    autoFocus
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    placeholder="Seu usuário"
-                    className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:border-transparent text-slate-800 lowercase"
-                  />
-                </div>
-              </div>
+                  <div className="text-center pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsResetMode(true);
+                        setErrorMsg('');
+                      }}
+                      className="text-xs text-emerald-800 hover:text-emerald-950 font-semibold hover:underline inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <KeyRound className="w-3.5 h-3.5 text-amber-600" />
+                      <span>Esqueceu ou precisa redefinir a senha do Administrador?</span>
+                    </button>
+                  </div>
 
-              <div>
-                <div className="flex justify-between items-center mb-1.5">
-                  <label className="text-xs font-semibold text-slate-700">Senha</label>
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="text-xs text-slate-500 hover:text-slate-800 flex items-center gap-1 cursor-pointer"
-                  >
-                    {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                    <span>{showPassword ? 'Ocultar senha' : 'Ver senha'}</span>
-                  </button>
-                </div>
-                <div className="relative">
-                  <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:border-transparent text-slate-800"
-                  />
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full py-3 px-4 rounded-xl bg-emerald-800 hover:bg-emerald-900 active:scale-[0.99] text-white font-bold text-sm transition shadow-md hover:shadow-lg flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 mt-3"
-              >
-                {loading ? (
-                  <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                ) : (
-                  <>
-                    <span>Entrar no Sistema</span>
-                    <ArrowRight className="w-4 h-4 text-amber-300" />
-                  </>
-                )}
-              </button>
-
-              <div className="mt-5 text-center text-xs text-slate-500 pt-3 border-t border-slate-100 space-y-1">
-                <p className="text-slate-600 font-medium">
-                  Acesso exclusivo para administradores e funcionários.
-                </p>
-                <p className="text-[11px] text-slate-400">
-                  Novos operadores são cadastrados pelo administrador em "Usuários e Acessos".
-                </p>
-              </div>
-            </form>
+                  <div className="mt-4 text-center text-xs text-slate-500 pt-3 border-t border-slate-100 space-y-1">
+                    <p className="text-slate-600 font-medium">
+                      Acesso compartilhado: AI Studio, Vercel, celular e computador.
+                    </p>
+                    <p className="text-[11px] text-slate-400">
+                      Novos funcionários são cadastrados pelo administrador no menu "Usuários e Acessos".
+                    </p>
+                  </div>
+                </form>
+              )}
+            </>
           )}
         </div>
       </div>

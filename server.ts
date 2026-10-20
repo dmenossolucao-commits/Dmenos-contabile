@@ -103,8 +103,13 @@ async function loadAllUsers() {
       }
     }
 
-    // 2. Try Firestore system_users
+    // 2. Try Firestore app_users and system_users
     try {
+      const snapApp = await getDocs(collection(db, 'app_users'));
+      snapApp.forEach((d) => {
+        const u = d.data() as StoredUser;
+        usersCache.set(u.id, u);
+      });
       const snap = await getDocs(collection(db, 'system_users'));
       snap.forEach((d) => {
         const u = d.data() as StoredUser;
@@ -130,8 +135,9 @@ async function saveUser(user: StoredUser) {
     console.error('Error writing local auth store:', e);
   }
 
-  // Firestore sync
+  // Firestore sync (both collections for compatibility)
   try {
+    await setDoc(doc(db, 'app_users', user.id), user);
     await setDoc(doc(db, 'system_users', user.id), user);
   } catch (e) {
     console.warn('Error saving user to Firestore:', (e as Error).message);
@@ -216,11 +222,27 @@ await loadAllUsers();
 // --- API ENDPOINTS ---
 
 // 1. GET /api/auth/status
-app.get('/api/auth/status', (req: Request, res: Response) => {
-  const adminExists = Array.from(usersCache.values()).some((u) => u.role === 'admin');
-  res.json({
-    needsInitialSetup: !adminExists,
-  });
+app.get('/api/auth/status', async (req: Request, res: Response) => {
+  try {
+    const snapApp = await getDocs(collection(db, 'app_users'));
+    let hasAdmin = false;
+    snapApp.forEach((d) => {
+      const u = d.data() as StoredUser;
+      usersCache.set(u.id, u);
+      if (u.role === 'admin' && u.status === 'active') {
+        hasAdmin = true;
+      }
+    });
+    res.json({
+      needsInitialSetup: !hasAdmin,
+    });
+  } catch (err) {
+    const adminExists = Array.from(usersCache.values()).some((u) => u.role === 'admin' && u.status === 'active');
+    res.json({
+      needsInitialSetup: !adminExists,
+      error: (err as Error).message,
+    });
+  }
 });
 
 // 2. POST /api/auth/setup-admin
@@ -504,7 +526,10 @@ const isProduction = process.env.NODE_ENV === 'production';
 
 if (!isProduction) {
   const vite = await createViteServer({
-    server: { middlewareMode: true },
+    server: {
+      middlewareMode: true,
+      hmr: false,
+    },
     appType: 'spa',
   });
   app.use(vite.middlewares);

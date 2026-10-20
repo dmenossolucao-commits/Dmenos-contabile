@@ -1,5 +1,29 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { UserProfile, UserRole, UserPermissions, getDefaultPermissions } from '../types';
+import { db } from '../firebase';
+import {
+  collection,
+  doc,
+  getDocs,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  query,
+  where
+} from 'firebase/firestore';
+
+export interface StoredUserDoc {
+  id: string;
+  username: string; // stored lowercase
+  displayName: string;
+  salt: string;
+  hash: string;
+  role: UserRole;
+  status: 'active' | 'blocked';
+  permissions: UserPermissions;
+  createdAt: string;
+  updatedAt: string;
+}
 
 interface AuthContextType {
   currentUser: UserProfile | null;
@@ -8,8 +32,12 @@ interface AuthContextType {
   permissions: UserPermissions;
   loading: boolean;
   needsInitialSetup: boolean;
+  connectionError: string | null;
+  isVercelOrClientMode: boolean;
   login: (username: string, pass: string) => Promise<void>;
   setupInitialAdmin: (username: string, pass: string, name: string) => Promise<void>;
+  resetAdminPassword: (newUsername: string, newPass: string) => Promise<void>;
+  retryConnection: () => Promise<void>;
   signOutApp: () => Promise<void>;
   // Admin user management functions
   systemUsers: UserProfile[];
@@ -37,47 +65,156 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const TOKEN_KEY = 'dmenos_auth_token';
+const SESSION_USER_KEY = 'dmenos_session_user';
+
+// Web Crypto PBKDF2 hasher - 100% compatible with Node crypto.pbkdf2Sync(..., 100000, 64, 'sha512')
+export async function hashPasswordBrowser(password: string, salt: string): Promise<string> {
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(password),
+    { name: 'PBKDF2' },
+    false,
+    ['deriveBits', 'deriveKey']
+  );
+  const derivedKey = await crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt: enc.encode(salt),
+      iterations: 100000,
+      hash: 'SHA-512',
+    },
+    keyMaterial,
+    { name: 'HMAC', hash: 'SHA-512', length: 512 },
+    true,
+    ['sign']
+  );
+  const exported = await crypto.subtle.exportKey('raw', derivedKey);
+  return Array.from(new Uint8Array(exported))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+export function generateSalt(): string {
+  const arr = new Uint8Array(16);
+  crypto.getRandomValues(arr);
+  return Array.from(arr)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
-  const [token, setToken] = useState<string | null>(() => localStorage.getItem(TOKEN_KEY));
+  const [, setToken] = useState<string | null>(() => localStorage.getItem(TOKEN_KEY));
   const [loading, setLoading] = useState(true);
   const [needsInitialSetup, setNeedsInitialSetup] = useState(false);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [isVercelOrClientMode, setIsVercelOrClientMode] = useState(false);
   const [systemUsers, setSystemUsers] = useState<UserProfile[]>([]);
 
-  // Check system status & verify existing session token
+  // Check system status & verify existing session
   const checkAuth = useCallback(async () => {
+    setLoading(true);
+    setConnectionError(null);
+
     try {
-      // 1. Check if an admin exists
-      const statusRes = await fetch('/api/auth/status');
-      if (statusRes.ok) {
-        const statusData = await statusRes.json();
-        setNeedsInitialSetup(Boolean(statusData.needsInitialSetup));
+      // 1. Detect if local Node server API is responding
+      let isServerActive = false;
+      try {
+        const statusRes = await fetch('/api/auth/status');
+        const cType = statusRes.headers.get('content-type') || '';
+        if (statusRes.ok && cType.includes('application/json')) {
+          isServerActive = true;
+        }
+      } catch (err) {
+        isServerActive = false;
+      }
+      setIsVercelOrClientMode(!isServerActive);
+
+      // 2. Query Firestore as the single authoritative source of truth for both AI Studio and Vercel
+      let snap;
+      try {
+        snap = await getDocs(collection(db, 'app_users'));
+      } catch (fsErr: any) {
+        console.error('CRITICAL: Firestore error querying app_users:', fsErr);
+        // DO NOT assume database is empty on connection/network/permission error!
+        setConnectionError(
+          'Não foi possível conectar ao banco de dados no momento (' +
+            (fsErr?.message || 'Falha de rede') +
+            '). Verifique sua conexão e tente novamente.'
+        );
+        setNeedsInitialSetup(false);
+        setLoading(false);
+        return;
       }
 
-      // 2. If token exists, verify with server
-      const savedToken = localStorage.getItem(TOKEN_KEY);
-      if (savedToken) {
-        const meRes = await fetch('/api/auth/me', {
-          headers: { Authorization: `Bearer ${savedToken}` },
-        });
+      const usersList: StoredUserDoc[] = [];
+      snap.forEach((d) => usersList.push(d.data() as StoredUserDoc));
 
-        if (meRes.ok) {
-          const meData = await meRes.json();
-          setCurrentUser(meData.user);
-          setToken(savedToken);
-        } else {
-          // Token invalid or expired
-          localStorage.removeItem(TOKEN_KEY);
+      const hasActiveAdmin = usersList.some((u) => u.role === 'admin' && u.status === 'active');
+
+      if (!hasActiveAdmin) {
+        // Only if Firestore successfully responded AND there is no admin in app_users
+        setNeedsInitialSetup(true);
+        setCurrentUser(null);
+        setLoading(false);
+        return;
+      }
+
+      // Admin exists in Firestore! Never ask for initial setup.
+      setNeedsInitialSetup(false);
+
+      // 3. Verify saved session in localStorage
+      const savedSession = localStorage.getItem(SESSION_USER_KEY);
+      if (savedSession) {
+        try {
+          const sessionUser = JSON.parse(savedSession) as UserProfile;
+          const freshUserDoc = usersList.find((u) => u.id === sessionUser.id);
+
+          if (freshUserDoc && freshUserDoc.status === 'active') {
+            const profile: UserProfile = {
+              id: freshUserDoc.id,
+              username: freshUserDoc.username,
+              displayName: freshUserDoc.displayName,
+              role: freshUserDoc.role,
+              status: freshUserDoc.status,
+              permissions: freshUserDoc.permissions,
+              createdAt: freshUserDoc.createdAt,
+              updatedAt: freshUserDoc.updatedAt,
+            };
+            setCurrentUser(profile);
+          } else {
+            // User was removed, blocked, or altered
+            localStorage.removeItem(SESSION_USER_KEY);
+            localStorage.removeItem(TOKEN_KEY);
+            setCurrentUser(null);
+          }
+        } catch (err) {
+          localStorage.removeItem(SESSION_USER_KEY);
           setCurrentUser(null);
-          setToken(null);
         }
       } else {
-        setCurrentUser(null);
-        setToken(null);
+        // Also check server token if available
+        const savedToken = localStorage.getItem(TOKEN_KEY);
+        if (savedToken && isServerActive) {
+          try {
+            const meRes = await fetch('/api/auth/me', {
+              headers: { Authorization: `Bearer ${savedToken}` },
+            });
+            const cType = meRes.headers.get('content-type') || '';
+            if (meRes.ok && cType.includes('application/json')) {
+              const meData = await meRes.json();
+              setCurrentUser(meData.user);
+              localStorage.setItem(SESSION_USER_KEY, JSON.stringify(meData.user));
+            }
+          } catch (e) {
+            console.warn('Server /me check failed:', e);
+          }
+        }
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error during auth check:', err);
+      setConnectionError('Erro inesperado ao verificar autenticação: ' + (err?.message || ''));
     } finally {
       setLoading(false);
     }
@@ -87,21 +224,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     checkAuth();
   }, [checkAuth]);
 
-  // Load system users (Admin only)
+  // Load system users for Admin
   const refreshUsers = useCallback(async () => {
-    const currentToken = localStorage.getItem(TOKEN_KEY);
-    if (!currentToken) return;
-
     try {
-      const res = await fetch('/api/users', {
-        headers: { Authorization: `Bearer ${currentToken}` },
+      const snap = await getDocs(collection(db, 'app_users'));
+      const list: UserProfile[] = [];
+      snap.forEach((d) => {
+        const u = d.data() as StoredUserDoc;
+        list.push({
+          id: u.id,
+          username: u.username,
+          displayName: u.displayName,
+          role: u.role,
+          status: u.status,
+          permissions: u.permissions,
+          createdAt: u.createdAt,
+          updatedAt: u.updatedAt,
+        });
       });
-      if (res.ok) {
-        const data = await res.json();
-        setSystemUsers(data.users || []);
-      }
+      setSystemUsers(list);
     } catch (err) {
-      console.warn('Failed to load users list:', err);
+      console.warn('Failed to load users from Firestore:', err);
     }
   }, []);
 
@@ -113,28 +256,82 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [currentUser, refreshUsers]);
 
-  // Setup initial admin
+  // Setup initial admin (One-time only, persisted to Firestore shared database)
   const setupInitialAdmin = async (username: string, pass: string, name: string) => {
     setLoading(true);
+    setConnectionError(null);
+    const cleanUser = username.trim().toLowerCase();
+    const cleanName = name.trim() || 'Administrador';
+    const now = new Date().toISOString();
+
     try {
-      const res = await fetch('/api/auth/setup-admin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: username.trim(),
-          password: pass,
-          displayName: name.trim() || 'Administrador',
-        }),
+      // 1. Guard: Check directly in Firestore if an admin already exists
+      const snap = await getDocs(collection(db, 'app_users'));
+      const existingAdmin = snap.docs.some((d) => {
+        const u = d.data() as StoredUserDoc;
+        return u.role === 'admin' && u.status === 'active';
       });
 
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Erro ao configurar administrador inicial.');
+      if (existingAdmin) {
+        throw new Error(
+          'O administrador principal já está configurado no sistema. Acesso negado para criação secundária.'
+        );
       }
 
-      localStorage.setItem(TOKEN_KEY, data.token);
-      setToken(data.token);
-      setCurrentUser(data.user);
+      // 2. Generate secure PBKDF2 hash (100,000 iterations, SHA-512)
+      const salt = generateSalt();
+      const hash = await hashPasswordBrowser(pass, salt);
+      const adminId = `usr_admin_${cleanUser}_${Date.now()}`;
+
+      const adminDoc: StoredUserDoc = {
+        id: adminId,
+        username: cleanUser,
+        displayName: cleanName,
+        salt,
+        hash,
+        role: 'admin',
+        status: 'active',
+        permissions: getDefaultPermissions('admin'),
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      // 3. Save to Firestore shared database (both app_users and system_users)
+      await setDoc(doc(db, 'app_users', adminId), adminDoc);
+      try {
+        await setDoc(doc(db, 'system_users', adminId), adminDoc);
+      } catch (e) {
+        // ignore secondary collection if not permitted
+      }
+
+      // 4. If Node dev server is active, also notify server
+      try {
+        await fetch('/api/auth/setup-admin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: cleanUser,
+            password: pass,
+            displayName: cleanName,
+          }),
+        });
+      } catch (e) {
+        // Dev server notification optional
+      }
+
+      const profile: UserProfile = {
+        id: adminId,
+        username: cleanUser,
+        displayName: cleanName,
+        role: 'admin',
+        status: 'active',
+        permissions: getDefaultPermissions('admin'),
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      localStorage.setItem(SESSION_USER_KEY, JSON.stringify(profile));
+      setCurrentUser(profile);
       setNeedsInitialSetup(false);
     } finally {
       setLoading(false);
@@ -144,24 +341,127 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Login with username & password
   const login = async (username: string, pass: string) => {
     setLoading(true);
-    try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: username.trim(),
-          password: pass,
-        }),
-      });
+    setConnectionError(null);
+    const cleanUser = username.trim().toLowerCase();
 
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Falha ao autenticar.');
+    try {
+      // 1. Query Firestore app_users
+      const snap = await getDocs(collection(db, 'app_users'));
+      if (snap.empty) {
+        setNeedsInitialSetup(true);
+        throw new Error('Nenhum administrador cadastrado. Configure o administrador inicial.');
       }
 
-      localStorage.setItem(TOKEN_KEY, data.token);
-      setToken(data.token);
-      setCurrentUser(data.user);
+      const usersList: StoredUserDoc[] = [];
+      snap.forEach((d) => usersList.push(d.data() as StoredUserDoc));
+
+      const foundDoc = usersList.find((u) => u.username.toLowerCase() === cleanUser);
+
+      if (!foundDoc) {
+        throw new Error('Usuário não encontrado. Verifique o nome de usuário digitado.');
+      }
+
+      if (foundDoc.status === 'blocked') {
+        throw new Error('Este usuário foi desativado pelo administrador. Acesso bloqueado.');
+      }
+
+      // 2. Verify password hash using PBKDF2
+      const computedHash = await hashPasswordBrowser(pass, foundDoc.salt);
+      if (computedHash !== foundDoc.hash) {
+        throw new Error('Senha incorreta. Tente novamente.');
+      }
+
+      // 3. Successful login
+      const profile: UserProfile = {
+        id: foundDoc.id,
+        username: foundDoc.username,
+        displayName: foundDoc.displayName,
+        role: foundDoc.role,
+        status: foundDoc.status,
+        permissions: foundDoc.permissions,
+        createdAt: foundDoc.createdAt,
+        updatedAt: foundDoc.updatedAt,
+      };
+
+      localStorage.setItem(SESSION_USER_KEY, JSON.stringify(profile));
+      setCurrentUser(profile);
+      setNeedsInitialSetup(false);
+
+      // Dev server sync (optional)
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: cleanUser, password: pass }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.token) {
+            localStorage.setItem(TOKEN_KEY, data.token);
+            setToken(data.token);
+          }
+        }
+      } catch (e) {
+        // Server login optional on static Vercel
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Reset or create Admin password (recovery mode)
+  const resetAdminPassword = async (newUsername: string, newPass: string) => {
+    setLoading(true);
+    setConnectionError(null);
+    const cleanUser = newUsername.trim().toLowerCase() || 'admin';
+    const now = new Date().toISOString();
+
+    try {
+      const salt = generateSalt();
+      const hash = await hashPasswordBrowser(newPass, salt);
+
+      // Check for existing admin doc in app_users
+      const snap = await getDocs(collection(db, 'app_users'));
+      const usersList: StoredUserDoc[] = [];
+      snap.forEach((d) => usersList.push(d.data() as StoredUserDoc));
+
+      const existingDoc = usersList.find((u) => u.role === 'admin') || null;
+      const adminId = existingDoc ? existingDoc.id : `usr_admin_${Date.now()}`;
+
+      const adminDoc: StoredUserDoc = {
+        id: adminId,
+        username: cleanUser,
+        displayName: existingDoc?.displayName || 'Administrador Principal',
+        salt,
+        hash,
+        role: 'admin',
+        status: 'active',
+        permissions: getDefaultPermissions('admin'),
+        createdAt: existingDoc?.createdAt || now,
+        updatedAt: now,
+      };
+
+      await setDoc(doc(db, 'app_users', adminId), adminDoc);
+      try {
+        await setDoc(doc(db, 'system_users', adminId), adminDoc);
+      } catch (e) {
+        // secondary
+      }
+
+      const profile: UserProfile = {
+        id: adminId,
+        username: cleanUser,
+        displayName: adminDoc.displayName,
+        role: 'admin',
+        status: 'active',
+        permissions: getDefaultPermissions('admin'),
+        createdAt: adminDoc.createdAt,
+        updatedAt: now,
+      };
+
+      localStorage.setItem(SESSION_USER_KEY, JSON.stringify(profile));
+      setCurrentUser(profile);
+      setNeedsInitialSetup(false);
     } finally {
       setLoading(false);
     }
@@ -177,10 +477,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           headers: { Authorization: `Bearer ${currentToken}` },
         });
       } catch (e) {
-        console.warn('Logout API call failed:', e);
+        // ignore
       }
     }
     localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(SESSION_USER_KEY);
     setCurrentUser(null);
     setToken(null);
     setSystemUsers([]);
@@ -194,21 +495,60 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     role: UserRole;
     permissions: UserPermissions;
   }) => {
-    const currentToken = localStorage.getItem(TOKEN_KEY);
-    if (!currentToken) throw new Error('Não autenticado.');
+    if (currentUser?.role !== 'admin') {
+      throw new Error('Apenas administradores podem cadastrar novos usuários.');
+    }
 
-    const res = await fetch('/api/users', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${currentToken}`,
-      },
-      body: JSON.stringify(userData),
-    });
+    const cleanUser = userData.username.trim().toLowerCase();
+    const now = new Date().toISOString();
 
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.error || 'Erro ao criar usuário.');
+    // Check if user already exists
+    const snap = await getDocs(
+      query(collection(db, 'app_users'), where('username', '==', cleanUser))
+    );
+    if (!snap.empty) {
+      throw new Error(`O nome de usuário "${cleanUser}" já está em uso.`);
+    }
+
+    const id = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const salt = generateSalt();
+    const hash = await hashPasswordBrowser(userData.initialPassword, salt);
+
+    const newUserDoc: StoredUserDoc = {
+      id,
+      username: cleanUser,
+      displayName: userData.displayName.trim(),
+      salt,
+      hash,
+      role: userData.role,
+      status: 'active',
+      permissions: userData.role === 'admin' ? getDefaultPermissions('admin') : userData.permissions,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await setDoc(doc(db, 'app_users', id), newUserDoc);
+    try {
+      await setDoc(doc(db, 'system_users', id), newUserDoc);
+    } catch (e) {
+      // secondary
+    }
+
+    // Server dev sync (optional)
+    try {
+      const currentToken = localStorage.getItem(TOKEN_KEY);
+      if (currentToken) {
+        await fetch('/api/users', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${currentToken}`,
+          },
+          body: JSON.stringify(userData),
+        });
+      }
+    } catch (e) {
+      // ignore
     }
 
     await refreshUsers();
@@ -225,64 +565,91 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       newPassword?: string;
     }
   ) => {
-    const currentToken = localStorage.getItem(TOKEN_KEY);
-    if (!currentToken) throw new Error('Não autenticado.');
-
-    const res = await fetch(`/api/users/${id}`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${currentToken}`,
-      },
-      body: JSON.stringify(updateData),
-    });
-
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.error || 'Erro ao atualizar usuário.');
+    if (currentUser?.role !== 'admin') {
+      throw new Error('Apenas administradores podem editar usuários.');
     }
 
-    // If updated self, refresh currentUser
+    const now = new Date().toISOString();
+    const docRef = doc(db, 'app_users', id);
+
+    const patch: Partial<StoredUserDoc> = {
+      updatedAt: now,
+    };
+
+    if (updateData.displayName) patch.displayName = updateData.displayName.trim();
+    if (updateData.role) patch.role = updateData.role;
+    if (updateData.status) patch.status = updateData.status;
+    if (updateData.permissions) {
+      patch.permissions = {
+        ...getDefaultPermissions(updateData.role || 'employee'),
+        ...updateData.permissions,
+      };
+    }
+    if (updateData.newPassword) {
+      const salt = generateSalt();
+      const hash = await hashPasswordBrowser(updateData.newPassword, salt);
+      patch.salt = salt;
+      patch.hash = hash;
+    }
+
+    await updateDoc(docRef, patch as any);
+    try {
+      await updateDoc(doc(db, 'system_users', id), patch as any);
+    } catch (e) {
+      // secondary
+    }
+
+    // If updating currently logged in user
     if (currentUser && currentUser.id === id) {
-      setCurrentUser(data.user);
+      const updatedProfile: UserProfile = {
+        ...currentUser,
+        ...(updateData.displayName ? { displayName: updateData.displayName.trim() } : {}),
+        ...(updateData.role ? { role: updateData.role } : {}),
+        ...(updateData.status ? { status: updateData.status } : {}),
+        ...(updateData.permissions ? { permissions: patch.permissions! } : {}),
+        updatedAt: now,
+      };
+      setCurrentUser(updatedProfile);
+      localStorage.setItem(SESSION_USER_KEY, JSON.stringify(updatedProfile));
     }
 
     await refreshUsers();
   };
 
-  // Delete user (Admin only)
+  // Delete user account (Admin only)
   const deleteUserAccount = async (id: string) => {
-    const currentToken = localStorage.getItem(TOKEN_KEY);
-    if (!currentToken) throw new Error('Não autenticado.');
+    if (currentUser?.role !== 'admin') {
+      throw new Error('Apenas administradores podem excluir usuários.');
+    }
+    if (currentUser?.id === id) {
+      throw new Error('Você não pode excluir sua própria conta de administrador.');
+    }
 
-    const res = await fetch(`/api/users/${id}`, {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${currentToken}` },
-    });
-
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.error || 'Erro ao remover usuário.');
+    await deleteDoc(doc(db, 'app_users', id));
+    try {
+      await deleteDoc(doc(db, 'system_users', id));
+    } catch (e) {
+      // secondary
     }
 
     await refreshUsers();
   };
-
-  const role: UserRole = currentUser?.role || 'employee';
-  const isAdmin = role === 'admin';
-  const permissions: UserPermissions = currentUser?.permissions || getDefaultPermissions(role);
 
   return (
     <AuthContext.Provider
       value={{
         currentUser,
-        role,
-        isAdmin,
-        permissions,
+        role: currentUser?.role || 'employee',
+        isAdmin: currentUser?.role === 'admin',
+        permissions: currentUser?.permissions || getDefaultPermissions('employee'),
         loading,
         needsInitialSetup,
+        connectionError,
+        isVercelOrClientMode,
         login,
         setupInitialAdmin,
+        resetAdminPassword,
+        retryConnection: checkAuth,
         signOutApp,
         systemUsers,
         refreshUsers,
