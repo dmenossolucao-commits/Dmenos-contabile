@@ -39,11 +39,12 @@ type ReportType =
   | 'consolidado';
 
 export const ReportsView: React.FC = () => {
-  const { closures, expenses, vales, bankAccounts, bankTransactions, receivables } = useFinance();
+  const { closures, expenses, vales, bankAccounts, bankTransactions, receivables, expenseCategories = [], valeCategories = [] } = useFinance();
 
   const [reportType, setReportType] = useState<ReportType>('fechamentos_periodo');
   const [selectedClosureId, setSelectedClosureId] = useState(closures[0]?.id || '');
   const [selectedBankId, setSelectedBankId] = useState(bankAccounts[0]?.id || '');
+  const [categoryFilter, setCategoryFilter] = useState<string>('all');
 
   // Dates
   const [startDate, setStartDate] = useState(() => {
@@ -55,9 +56,11 @@ export const ReportsView: React.FC = () => {
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
+  const [toastType, setToastType] = useState<'success' | 'error'>('success');
 
-  const showToast = (msg: string) => {
+  const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
     setToastMessage(msg);
+    setToastType(type);
     setTimeout(() => setToastMessage(''), 3500);
   };
 
@@ -83,11 +86,15 @@ export const ReportsView: React.FC = () => {
     }
 
     if (reportType === 'despesas_vales') {
-      const filteredExp = expenses.filter((e) => e.date >= startDate && e.date <= endDate);
-      const filteredVales = vales.filter((v) => v.date >= startDate && v.date <= endDate);
+      let filteredExp = expenses.filter((e) => e.date >= startDate && e.date <= endDate);
+      let filteredVales = vales.filter((v) => v.date >= startDate && v.date <= endDate);
+      if (categoryFilter !== 'all') {
+        filteredExp = filteredExp.filter((e) => (e.category || '').toLowerCase() === categoryFilter.toLowerCase());
+        filteredVales = filteredVales.filter((v) => (v.category || '').toLowerCase() === categoryFilter.toLowerCase());
+      }
       return {
         doc: generateExpensesReportPDF(filteredExp, filteredVales, startDate, endDate),
-        filename: `Relatorio_Despesas_Vales_${startDate}_a_${endDate}.pdf`,
+        filename: `Relatorio_Despesas_Vales_${categoryFilter !== 'all' ? categoryFilter.replace(/\s+/g, '_') + '_' : ''}${startDate}_a_${endDate}.pdf`,
         title: `Relatório de Despesas e Vales (${formatDateBR(startDate)} a ${formatDateBR(endDate)})`,
       };
     }
@@ -128,9 +135,9 @@ export const ReportsView: React.FC = () => {
     try {
       const { doc, filename, title } = getActiveDoc();
       doc.save(filename);
-      showToast('Relatório baixado em formato PDF!');
+      showToast('Relatório baixado em formato PDF!', 'success');
     } catch (err: any) {
-      alert(err.message || 'Erro ao gerar PDF.');
+      showToast(err.message || 'Erro ao gerar PDF.', 'error');
     } finally {
       setIsGenerating(false);
     }
@@ -141,7 +148,7 @@ export const ReportsView: React.FC = () => {
       const { doc } = getActiveDoc();
       printPDF(doc);
     } catch (err: any) {
-      alert(err.message || 'Erro ao imprimir PDF.');
+      showToast(err.message || 'Erro ao imprimir PDF.', 'error');
     }
   };
 
@@ -151,12 +158,12 @@ export const ReportsView: React.FC = () => {
       const { doc, filename, title } = getActiveDoc();
       const res = await downloadOrSharePDF(doc, filename, title);
       if (res.shared) {
-        showToast('Relatório compartilhado com sucesso!');
+        showToast('Relatório compartilhado com sucesso!', 'success');
       } else if (res.downloaded) {
-        showToast('Relatório salvo em PDF.');
+        showToast('Relatório salvo em PDF.', 'success');
       }
     } catch (err: any) {
-      alert(err.message || 'Erro ao compartilhar.');
+      showToast(err.message || 'Erro ao compartilhar.', 'error');
     } finally {
       setIsGenerating(false);
     }
@@ -188,8 +195,10 @@ export const ReportsView: React.FC = () => {
     <div className="space-y-6">
       {/* Toast Notification */}
       {toastMessage && (
-        <div className="fixed top-4 right-4 z-50 flex items-center gap-2 px-4 py-3 rounded-xl bg-emerald-800 text-white shadow-lg text-sm font-semibold animate-in fade-in slide-in-from-top-4">
-          <CheckCircle2 className="w-5 h-5 text-amber-300" />
+        <div className={`fixed top-4 right-4 z-50 flex items-center gap-2 px-4 py-3 rounded-xl shadow-lg text-sm font-semibold animate-in fade-in slide-in-from-top-4 ${
+          toastType === 'error' ? 'bg-red-700 text-white border border-red-800' : 'bg-emerald-800 text-white'
+        }`}>
+          {toastType === 'error' ? <AlertCircle className="w-5 h-5 text-red-200" /> : <CheckCircle2 className="w-5 h-5 text-amber-300" />}
           <span>{toastMessage}</span>
         </div>
       )}
@@ -315,9 +324,42 @@ export const ReportsView: React.FC = () => {
               >
                 {bankAccounts.map((a) => (
                   <option key={a.id} value={a.id}>
-                    {a.name} ({a.bankName})
+                    {a.name} ({a.bankName}){a.status === 'inactive' ? ' [Inativa]' : ''}
                   </option>
                 ))}
+              </select>
+            </div>
+          )}
+
+          {reportType === 'despesas_vales' && (
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">
+                Filtrar por Categoria (Opcional):
+              </label>
+              <select
+                value={categoryFilter}
+                onChange={(e) => setCategoryFilter(e.target.value)}
+                className="w-full p-2.5 rounded-xl border border-slate-200 bg-white font-medium text-slate-800"
+              >
+                <option value="all">Todas as Categorias (Consolidado)</option>
+                {expenseCategories.length > 0 && (
+                  <optgroup label="Categorias de Despesas">
+                    {expenseCategories.map((catName) => (
+                      <option key={`exp_${catName}`} value={catName}>
+                        {catName}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {valeCategories.length > 0 && (
+                  <optgroup label="Categorias de Vales">
+                    {valeCategories.map((catName) => (
+                      <option key={`vale_${catName}`} value={catName}>
+                        {catName}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
             </div>
           )}

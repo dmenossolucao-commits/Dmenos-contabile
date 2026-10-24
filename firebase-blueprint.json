@@ -189,6 +189,22 @@
         "createdAt": { "type": "string" }
       },
       "required": ["action", "entityType", "entityId", "createdAt"]
+    },
+    "FinancialCategory": {
+      "title": "FinancialCategory",
+      "description": "Categorias customizadas de despesas operacionais e vales",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["despesa", "vale"] },
+        "color": { "type": "string" },
+        "description": { "type": "string" },
+        "isDefault": { "type": "boolean" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["name", "type", "createdAt"]
     }
   },
   "firestore": {
@@ -207,6 +223,10 @@
     "/vales/{valeId}": {
       "schema": "Vale",
       "description": "Vales e adiantamentos a funcionários com controle de quitação"
+    },
+    "/categories/{categoryId}": {
+      "schema": "FinancialCategory",
+      "description": "Categorias de despesas e vales gerenciadas pelo usuário"
     },
     "/bank_accounts/{accountId}": {
       "schema": "BankAccount",

@@ -54,6 +54,13 @@ export const DailyClosureView: React.FC<DailyClosureViewProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successToast, setSuccessToast] = useState('');
+  const [toastType, setToastType] = useState<'success' | 'error'>('success');
+
+  const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
+    setSuccessToast(msg);
+    setToastType(type);
+    setTimeout(() => setSuccessToast(''), 4000);
+  };
 
   // Delete Single Closure State
   const [closureToDelete, setClosureToDelete] = useState<DailyClosure | null>(null);
@@ -237,10 +244,9 @@ export const DailyClosureView: React.FC<DailyClosureViewProps> = ({
         bankAllocations: allocations,
       });
 
-      setSuccessToast('Fechamento de caixa gravado com sucesso no sistema!');
+      showToast('Fechamento de caixa gravado com sucesso no sistema!', 'success');
       setIsModalOpen(false);
       if (onCloseModal) onCloseModal();
-      setTimeout(() => setSuccessToast(''), 4000);
     } catch (err: any) {
       console.error(err);
       setErrorMessage(err.message || 'Erro ao registrar fechamento.');
@@ -253,18 +259,17 @@ export const DailyClosureView: React.FC<DailyClosureViewProps> = ({
     e.preventDefault();
     if (!reopenModalClosure) return;
     if (!reopenReason.trim()) {
-      alert('Informe a justificativa para a reabertura do fechamento.');
+      showToast('Informe a justificativa para a reabertura do fechamento.', 'error');
       return;
     }
 
     try {
       await reopenClosure(reopenModalClosure.id, reopenReason.trim());
-      setSuccessToast(`Fechamento de ${formatDateBR(reopenModalClosure.date)} reaberto.`);
+      showToast(`Fechamento de ${formatDateBR(reopenModalClosure.date)} reaberto.`, 'success');
       setReopenModalClosure(null);
       setReopenReason('');
-      setTimeout(() => setSuccessToast(''), 3000);
     } catch (err: any) {
-      alert(err.message || 'Erro ao reabrir fechamento.');
+      showToast(err.message || 'Erro ao reabrir fechamento.', 'error');
     }
   };
 
@@ -293,12 +298,11 @@ export const DailyClosureView: React.FC<DailyClosureViewProps> = ({
     setIsDeleting(true);
     try {
       await deleteClosure(closureToDelete.id, deleteReason.trim() || 'Excluído pelo usuário');
-      setSuccessToast(`Fechamento do dia ${formatDateBR(closureToDelete.date)} excluído com sucesso.`);
+      showToast(`Fechamento do dia ${formatDateBR(closureToDelete.date)} excluído com sucesso.`, 'success');
       setClosureToDelete(null);
       setDeleteReason('');
-      setTimeout(() => setSuccessToast(''), 3500);
     } catch (err: any) {
-      alert(err.message || 'Erro ao excluir fechamento.');
+      showToast(err.message || 'Erro ao excluir fechamento.', 'error');
     } finally {
       setIsDeleting(false);
     }
@@ -308,19 +312,18 @@ export const DailyClosureView: React.FC<DailyClosureViewProps> = ({
   const handleConfirmClearHistory = async () => {
     if (closuresToClear.length === 0) return;
     if (historyConfirmationInput.trim().toUpperCase() !== 'EXCLUIR') {
-      alert('Digite EXCLUIR para confirmar a exclusão do histórico.');
+      showToast('Digite EXCLUIR para confirmar a exclusão do histórico.', 'error');
       return;
     }
     setIsClearingHistory(true);
     try {
       const ids = closuresToClear.map((c) => c.id);
       await deleteClosuresBatch(ids, `Limpeza de histórico: ${ids.length} fechamentos excluídos`);
-      setSuccessToast(`${ids.length} fechamento(s) excluído(s) do histórico com sucesso.`);
+      showToast(`${ids.length} fechamento(s) excluído(s) do histórico com sucesso.`, 'success');
       setIsClearHistoryModalOpen(false);
       setHistoryConfirmationInput('');
-      setTimeout(() => setSuccessToast(''), 3500);
     } catch (err: any) {
-      alert(err.message || 'Erro ao excluir histórico de fechamentos.');
+      showToast(err.message || 'Erro ao excluir histórico de fechamentos.', 'error');
     } finally {
       setIsClearingHistory(false);
     }
@@ -330,8 +333,10 @@ export const DailyClosureView: React.FC<DailyClosureViewProps> = ({
     <div className="space-y-6">
       {/* Toast Notification */}
       {successToast && (
-        <div className="fixed top-4 right-4 z-50 flex items-center gap-2 px-4 py-3 rounded-xl bg-emerald-800 text-white shadow-lg text-sm font-semibold animate-in fade-in slide-in-from-top-4">
-          <CheckCircle2 className="w-5 h-5 text-amber-300" />
+        <div className={`fixed top-4 right-4 z-50 flex items-center gap-2 px-4 py-3 rounded-xl shadow-lg text-sm font-semibold animate-in fade-in slide-in-from-top-4 ${
+          toastType === 'error' ? 'bg-red-700 text-white border border-red-800' : 'bg-emerald-800 text-white'
+        }`}>
+          {toastType === 'error' ? <AlertCircle className="w-5 h-5 text-red-200" /> : <CheckCircle2 className="w-5 h-5 text-amber-300" />}
           <span>{successToast}</span>
         </div>
       )}

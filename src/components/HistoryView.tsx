@@ -4,6 +4,7 @@ import {
   formatCurrency,
   formatDateBR,
   formatDateTimeBR,
+  getTodayDateBR,
 } from '../utils/formatters';
 import {
   History,
@@ -24,11 +25,14 @@ import {
   CheckCircle2,
   Printer,
   Share2,
-  FileText
+  FileText,
+  AlertCircle
 } from 'lucide-react';
 import { DailyClosure, BankTransaction } from '../types';
 import {
   generateClosurePDF,
+  generateBankStatementPDF,
+  generateConsolidatedBankStatementPDF,
   downloadOrSharePDF,
   printPDF
 } from '../services/pdfReportService';
@@ -75,6 +79,13 @@ export const HistoryView: React.FC = () => {
   const [confirmationInput, setConfirmationInput] = useState('');
   const [isClearing, setIsClearing] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
+  const [toastType, setToastType] = useState<'success' | 'error'>('success');
+
+  const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
+    setToastMessage(msg);
+    setToastType(type);
+    setTimeout(() => setToastMessage(''), 3500);
+  };
 
   // Filtered Closures
   const filteredClosures = useMemo(() => {
@@ -91,20 +102,96 @@ export const HistoryView: React.FC = () => {
     });
   }, [closures, searchTerm, startDate, endDate, statusFilter]);
 
+  // Bank Statement Filter States
+  const [selectedBankAccountId, setSelectedBankAccountId] = useState<string>('all');
+  const [bankTransTypeFilter, setBankTransTypeFilter] = useState<'all' | 'entrada' | 'saida' | 'transferencia'>('all');
+
   // Filtered Bank Transactions
-  const filteredTransactions = useMemo(() => {
-    return bankTransactions.filter((t) => {
+  const filteredBankHistory = useMemo(() => {
+    let list = bankTransactions.filter((t) => {
+      const matchAccount = selectedBankAccountId === 'all' || t.accountId === selectedBankAccountId;
       const matchSearch =
         t.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        t.category.toLowerCase().includes(searchTerm.toLowerCase());
+        t.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (t.documentNumber && t.documentNumber.toLowerCase().includes(searchTerm.toLowerCase())) ||
+        (t.responsibleName && t.responsibleName.toLowerCase().includes(searchTerm.toLowerCase()));
 
       const matchStart = !startDate || t.date >= startDate;
       const matchEnd = !endDate || t.date <= endDate;
       const matchStatus = statusFilter === 'all' || t.status === statusFilter;
 
-      return matchSearch && matchStart && matchEnd && matchStatus;
+      return matchAccount && matchSearch && matchStart && matchEnd && matchStatus;
     });
-  }, [bankTransactions, searchTerm, startDate, endDate, statusFilter]);
+
+    if (bankTransTypeFilter === 'entrada') {
+      list = list.filter((t) => t.amount > 0 && !t.type.includes('transferencia'));
+    } else if (bankTransTypeFilter === 'saida') {
+      list = list.filter((t) => t.amount < 0 && !t.type.includes('transferencia'));
+    } else if (bankTransTypeFilter === 'transferencia') {
+      list = list.filter((t) => t.type.includes('transferencia') || Boolean(t.relatedTransferId));
+    }
+
+    list.sort((a, b) => {
+      const c = a.date.localeCompare(b.date);
+      if (c !== 0) return c;
+      return (a.createdAt || '').localeCompare(b.createdAt || '');
+    });
+
+    return list;
+  }, [bankTransactions, selectedBankAccountId, searchTerm, startDate, endDate, statusFilter, bankTransTypeFilter]);
+
+  // Totals for bank statement view
+  const bankHistoryTotals = useMemo(() => {
+    const isSingleAccount = selectedBankAccountId !== 'all';
+    const activeTrans = bankTransactions.filter(
+      (t) =>
+        t.status === 'active' &&
+        !t.relatedClosureId &&
+        t.category !== 'Saldo de Abertura' &&
+        !t.id?.startsWith('bt_init_') &&
+        (isSingleAccount ? t.accountId === selectedBankAccountId : true)
+    );
+
+    let initialBalance = 0;
+    if (isSingleAccount) {
+      const acc = bankAccounts.find((a) => a.id === selectedBankAccountId);
+      const prior = activeTrans.filter((t) => startDate && t.date < startDate);
+      initialBalance = (acc?.initialBalance || 0) + prior.reduce((a, b) => a + b.amount, 0);
+    } else {
+      const totalAccInitial = bankAccounts.reduce((a, b) => a + b.initialBalance, 0);
+      const prior = activeTrans.filter((t) => startDate && t.date < startDate);
+      initialBalance = totalAccInitial + prior.reduce((a, b) => a + b.amount, 0);
+    }
+
+    let totalEntradas = 0;
+    let totalSaidas = 0;
+    let totalTransf = 0;
+
+    filteredBankHistory.forEach((t) => {
+      if (t.status !== 'active') return;
+      const isInternal = t.type.includes('transferencia') || Boolean(t.relatedTransferId);
+
+      if (!isSingleAccount && isInternal) {
+        if (t.amount > 0) totalTransf += t.amount;
+      } else {
+        if (t.amount > 0) totalEntradas += t.amount;
+        else if (t.amount < 0) totalSaidas += Math.abs(t.amount);
+      }
+    });
+
+    const finalBalance = initialBalance + totalEntradas - totalSaidas;
+
+    return {
+      initialBalance,
+      totalEntradas,
+      totalSaidas,
+      totalTransf,
+      finalBalance,
+      isSingleAccount,
+    };
+  }, [bankTransactions, bankAccounts, selectedBankAccountId, startDate, filteredBankHistory]);
+
+  const filteredTransactions = filteredBankHistory;
 
   // Filtered Audit Logs
   const filteredAuditLogs = useMemo(() => {
@@ -127,12 +214,11 @@ export const HistoryView: React.FC = () => {
     setIsDeletingClosure(true);
     try {
       await deleteClosure(closureToDelete.id, deleteReason.trim() || 'Excluído no histórico');
-      setToastMessage(`Fechamento do dia ${formatDateBR(closureToDelete.date)} excluído com sucesso.`);
+      showToast(`Fechamento do dia ${formatDateBR(closureToDelete.date)} excluído com sucesso.`, 'success');
       setClosureToDelete(null);
       setDeleteReason('');
-      setTimeout(() => setToastMessage(''), 3500);
     } catch (err: any) {
-      alert(err.message || 'Erro ao excluir fechamento.');
+      showToast(err.message || 'Erro ao excluir fechamento.', 'error');
     } finally {
       setIsDeletingClosure(false);
     }
@@ -143,19 +229,18 @@ export const HistoryView: React.FC = () => {
     const list = closuresClearType === 'all' ? closures : filteredClosures;
     if (list.length === 0) return;
     if (confirmationInput.trim().toUpperCase() !== 'EXCLUIR') {
-      alert('Digite EXCLUIR para confirmar a exclusão do histórico.');
+      showToast('Digite EXCLUIR para confirmar a exclusão do histórico.', 'error');
       return;
     }
     setIsClearing(true);
     try {
       const ids = list.map((c) => c.id);
       await deleteClosuresBatch(ids, `Limpeza de histórico: ${ids.length} fechamentos excluídos`);
-      setToastMessage(`${ids.length} fechamento(s) excluído(s) do histórico.`);
+      showToast(`${ids.length} fechamento(s) excluído(s) do histórico.`, 'success');
       setIsClearClosuresModalOpen(false);
       setConfirmationInput('');
-      setTimeout(() => setToastMessage(''), 3500);
     } catch (err: any) {
-      alert(err.message || 'Erro ao excluir histórico de fechamentos.');
+      showToast(err.message || 'Erro ao excluir histórico de fechamentos.', 'error');
     } finally {
       setIsClearing(false);
     }
@@ -167,11 +252,10 @@ export const HistoryView: React.FC = () => {
     setIsDeletingTransaction(true);
     try {
       await deleteBankTransaction(transactionToDelete.id, 'Exclusão pelo usuário no extrato');
-      setToastMessage(`Movimentação "${transactionToDelete.description}" excluída.`);
+      showToast(`Movimentação "${transactionToDelete.description}" excluída.`, 'success');
       setTransactionToDelete(null);
-      setTimeout(() => setToastMessage(''), 3500);
     } catch (err: any) {
-      alert(err.message || 'Erro ao excluir movimentação bancária.');
+      showToast(err.message || 'Erro ao excluir movimentação bancária.', 'error');
     } finally {
       setIsDeletingTransaction(false);
     }
@@ -182,19 +266,18 @@ export const HistoryView: React.FC = () => {
     const list = auditClearType === 'all' ? auditLogs : filteredAuditLogs;
     if (list.length === 0) return;
     if (confirmationInput.trim().toUpperCase() !== 'EXCLUIR') {
-      alert('Digite EXCLUIR para confirmar a limpeza do histórico.');
+      showToast('Digite EXCLUIR para confirmar a limpeza do histórico.', 'error');
       return;
     }
     setIsClearing(true);
     try {
       const ids = list.map((l) => l.id);
       await clearAuditHistory(ids);
-      setToastMessage(`Histórico de auditoria limpo (${ids.length} logs removidos).`);
+      showToast(`Histórico de auditoria limpo (${ids.length} logs removidos).`, 'success');
       setIsClearAuditModalOpen(false);
       setConfirmationInput('');
-      setTimeout(() => setToastMessage(''), 3500);
     } catch (err: any) {
-      alert(err.message || 'Erro ao limpar histórico de auditoria.');
+      showToast(err.message || 'Erro ao limpar histórico de auditoria.', 'error');
     } finally {
       setIsClearing(false);
     }
@@ -204,8 +287,10 @@ export const HistoryView: React.FC = () => {
     <div className="space-y-6">
       {/* Toast Notification */}
       {toastMessage && (
-        <div className="fixed top-4 right-4 z-50 flex items-center gap-2 px-4 py-3 rounded-xl bg-emerald-800 text-white shadow-lg text-sm font-semibold animate-in fade-in slide-in-from-top-4">
-          <CheckCircle2 className="w-5 h-5 text-amber-300" />
+        <div className={`fixed top-4 right-4 z-50 flex items-center gap-2 px-4 py-3 rounded-xl shadow-lg text-sm font-semibold animate-in fade-in slide-in-from-top-4 ${
+          toastType === 'error' ? 'bg-red-700 text-white border border-red-800' : 'bg-emerald-800 text-white'
+        }`}>
+          {toastType === 'error' ? <AlertCircle className="w-5 h-5 text-red-200" /> : <CheckCircle2 className="w-5 h-5 text-amber-300" />}
           <span>{toastMessage}</span>
         </div>
       )}
@@ -485,19 +570,221 @@ export const HistoryView: React.FC = () => {
         </div>
       )}
 
-      {/* VIEW B: HISTÓRICO BANCÁRIO */}
+      {/* VIEW B: HISTÓRICO BANCÁRIO AMPLIADO */}
       {activeTab === 'bancario' && (
-        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
-          <div className="p-4 border-b border-slate-100 flex justify-between items-center">
+        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden space-y-4 p-5">
+          {/* Header e Controles da Aba Bancária */}
+          <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 pb-4 border-b border-slate-100">
             <div>
-              <h2 className="text-sm font-bold text-slate-900">
-                Visão B: Movimentações Bancárias Consolidadas ({filteredTransactions.length})
-              </h2>
-              <p className="text-xs text-slate-500">Lançamentos reais de contas bancárias (independentes do fechamento)</p>
+              <div className="flex items-center gap-2">
+                <h2 className="text-base font-black text-slate-900 tracking-tight">
+                  Extrato e Histórico Bancário
+                </h2>
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-800">
+                  {selectedBankAccountId === 'all'
+                    ? 'Consolidado (Todos os Bancos)'
+                    : bankAccounts.find((a) => a.id === selectedBankAccountId)?.name || 'Conta Específica'}
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {selectedBankAccountId === 'all'
+                  ? 'Visão consolidada de todas as contas. Transferências internas são tratadas neutralmente para não inflar receitas nem despesas.'
+                  : 'Extrato estrito da conta selecionada com saldo e movimentações auditáveis.'}
+              </p>
+            </div>
+
+            {/* Ações de Impressão e PDF */}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  const start = startDate || '2026-01-01';
+                  const end = endDate || getTodayDateBR();
+
+                  if (selectedBankAccountId === 'all') {
+                    const doc = generateConsolidatedBankStatementPDF(
+                      bankAccounts,
+                      bankTransactions,
+                      start,
+                      end,
+                      bankTransTypeFilter,
+                      searchTerm
+                    );
+                    await downloadOrSharePDF(
+                      doc,
+                      `Extrato_Consolidado_Bancos_${start}_a_${end}.pdf`,
+                      'Extrato Bancário Consolidado'
+                    );
+                  } else {
+                    const acc = bankAccounts.find((a) => a.id === selectedBankAccountId) || bankAccounts[0];
+                    if (!acc) return;
+                    const doc = generateBankStatementPDF(
+                      acc,
+                      bankTransactions,
+                      start,
+                      end,
+                      bankTransTypeFilter,
+                      'all',
+                      searchTerm
+                    );
+                    await downloadOrSharePDF(
+                      doc,
+                      `Extrato_${acc.name.replace(/\s+/g, '_')}_${start}_a_${end}.pdf`,
+                      `Extrato Bancário - ${acc.name}`
+                    );
+                  }
+                }}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold text-xs transition cursor-pointer"
+                title="Exportar extrato selecionado em PDF"
+              >
+                <FileText className="w-3.5 h-3.5 text-emerald-800" />
+                <span>Exportar PDF</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const start = startDate || '2026-01-01';
+                  const end = endDate || getTodayDateBR();
+
+                  if (selectedBankAccountId === 'all') {
+                    const doc = generateConsolidatedBankStatementPDF(
+                      bankAccounts,
+                      bankTransactions,
+                      start,
+                      end,
+                      bankTransTypeFilter,
+                      searchTerm
+                    );
+                    printPDF(doc);
+                  } else {
+                    const acc = bankAccounts.find((a) => a.id === selectedBankAccountId) || bankAccounts[0];
+                    if (!acc) return;
+                    const doc = generateBankStatementPDF(
+                      acc,
+                      bankTransactions,
+                      start,
+                      end,
+                      bankTransTypeFilter,
+                      'all',
+                      searchTerm
+                    );
+                    printPDF(doc);
+                  }
+                }}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold text-xs transition cursor-pointer"
+                title="Imprimir extrato"
+              >
+                <Printer className="w-3.5 h-3.5 text-slate-600" />
+                <span>Imprimir</span>
+              </button>
             </div>
           </div>
 
-          <div className="overflow-x-auto">
+          {/* Filtros Bancários Específicos */}
+          <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-2xl grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+            {/* Seletor de Banco */}
+            <div>
+              <label className="block font-semibold text-slate-600 mb-1">Selecionar Banco / Conta</label>
+              <select
+                value={selectedBankAccountId}
+                onChange={(e) => setSelectedBankAccountId(e.target.value)}
+                className="w-full p-2.5 rounded-xl border border-slate-200 bg-white font-semibold text-slate-800 shadow-2xs"
+              >
+                <option value="all">Todos os Bancos (Consolidado)</option>
+                {bankAccounts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name} ({a.bankName}){a.status === 'inactive' ? ' [Inativa]' : ''} — Saldo: {formatCurrency(a.currentBalance)}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Filtro de Tipo de Operação */}
+            <div>
+              <label className="block font-semibold text-slate-600 mb-1">Tipo de Movimentação</label>
+              <select
+                value={bankTransTypeFilter}
+                onChange={(e) => setBankTransTypeFilter(e.target.value as any)}
+                className="w-full p-2.5 rounded-xl border border-slate-200 bg-white text-slate-800 font-medium"
+              >
+                <option value="all">Todas (Entradas, Saídas e Transf.)</option>
+                <option value="entrada">Apenas Entradas (+)</option>
+                <option value="saida">Apenas Saídas (-)</option>
+                <option value="transferencia">Apenas Transferências</option>
+              </select>
+            </div>
+
+            {/* Período Informativo */}
+            <div className="sm:col-span-2 flex items-center justify-between bg-white px-3.5 py-2 rounded-xl border border-slate-200 text-slate-600">
+              <div>
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">Filtro de Período Geral Ativo</span>
+                <span className="text-xs font-semibold text-slate-800">
+                  {startDate ? formatDateBR(startDate) : 'Início dos registros'} até{' '}
+                  {endDate ? formatDateBR(endDate) : 'Data atual'}
+                </span>
+              </div>
+              <span className="text-xs font-bold text-slate-500">
+                {filteredBankHistory.length} movimentação(ões)
+              </span>
+            </div>
+          </div>
+
+          {/* Cards de Métricas e Saldos do Extrato */}
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3">
+            <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+              <span className="text-[10px] uppercase font-bold text-slate-400 block">Saldo Anterior</span>
+              <div className="text-base font-black text-slate-800 mt-0.5">
+                {formatCurrency(bankHistoryTotals.initialBalance)}
+              </div>
+              <span className="text-[10px] text-slate-400 block">
+                {startDate ? `Antes de ${formatDateBR(startDate)}` : 'Saldo de Abertura'}
+              </span>
+            </div>
+
+            <div className="bg-emerald-50/70 p-3.5 rounded-xl border border-emerald-200">
+              <span className="text-[10px] uppercase font-bold text-emerald-800 block">Entradas (+)</span>
+              <div className="text-base font-black text-emerald-800 mt-0.5">
+                +{formatCurrency(bankHistoryTotals.totalEntradas)}
+              </div>
+              <span className="text-[10px] text-emerald-600 block">
+                {bankHistoryTotals.isSingleAccount ? 'Créditos na conta' : 'Receitas externas reais'}
+              </span>
+            </div>
+
+            <div className="bg-rose-50/70 p-3.5 rounded-xl border border-rose-200">
+              <span className="text-[10px] uppercase font-bold text-rose-800 block">Saídas (-)</span>
+              <div className="text-base font-black text-rose-700 mt-0.5">
+                -{formatCurrency(bankHistoryTotals.totalSaidas)}
+              </div>
+              <span className="text-[10px] text-rose-600 block">
+                {bankHistoryTotals.isSingleAccount ? 'Débitos na conta' : 'Despesas externas reais'}
+              </span>
+            </div>
+
+            {!bankHistoryTotals.isSingleAccount && (
+              <div className="bg-blue-50/70 p-3.5 rounded-xl border border-blue-200">
+                <span className="text-[10px] uppercase font-bold text-blue-800 block">Transf. Internas</span>
+                <div className="text-base font-black text-blue-900 mt-0.5">
+                  {formatCurrency(bankHistoryTotals.totalTransf)}
+                </div>
+                <span className="text-[10px] text-blue-600 block">Sem duplicidade de faturamento</span>
+              </div>
+            )}
+
+            <div className="bg-slate-900 p-3.5 rounded-xl border border-slate-800 text-white col-span-2 sm:col-span-1">
+              <span className="text-[10px] uppercase font-bold text-amber-300 block">Saldo Final</span>
+              <div className="text-base font-black text-white mt-0.5">
+                {formatCurrency(bankHistoryTotals.finalBalance)}
+              </div>
+              <span className="text-[10px] text-slate-400 block">
+                {endDate ? `Em ${formatDateBR(endDate)}` : 'Disponível atual'}
+              </span>
+            </div>
+          </div>
+
+          {/* Tabela do Histórico Bancário */}
+          <div className="overflow-x-auto rounded-2xl border border-slate-200">
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
                 <tr>
@@ -508,15 +795,17 @@ export const HistoryView: React.FC = () => {
                   <th className="py-3 px-4">Tipo</th>
                   <th className="py-3 px-4 text-right">Valor</th>
                   <th className="py-3 px-4 text-center">Situação</th>
-                  <th className="py-3 px-4">Origem / Referência</th>
+                  <th className="py-3 px-4">Responsável / Doc</th>
                   <th className="py-3 px-4 text-center">Ações</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700">
-                {filteredTransactions.length > 0 ? (
-                  filteredTransactions.map((tx) => {
+                {filteredBankHistory.length > 0 ? (
+                  filteredBankHistory.map((tx) => {
                     const acc = bankAccounts.find((a) => a.id === tx.accountId);
                     const isCredit = tx.amount >= 0;
+                    const isTransfer = tx.type.includes('transferencia') || Boolean(tx.relatedTransferId);
+
                     return (
                       <tr
                         key={tx.id}
@@ -531,7 +820,14 @@ export const HistoryView: React.FC = () => {
                           {acc ? acc.name : 'Conta'}
                         </td>
                         <td className="py-3 px-4 font-medium text-slate-800">
-                          {tx.description}
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span>{tx.description}</span>
+                            {isTransfer && (
+                              <span className="px-1.5 py-0.5 rounded-md bg-blue-50 text-blue-800 text-[10px] font-bold border border-blue-200">
+                                Transf. Interna
+                              </span>
+                            )}
+                          </div>
                           {tx.notes && (
                             <span className="block text-[11px] text-slate-400 font-normal">
                               {tx.notes}
@@ -564,14 +860,17 @@ export const HistoryView: React.FC = () => {
                             {tx.status === 'active' ? 'Ativo' : 'Cancelado/Estornado'}
                           </span>
                         </td>
-                        <td className="py-3 px-4 text-slate-400 text-[11px]">
-                          {tx.relatedClosureId && `Fechamento: ${tx.relatedClosureId}`}
-                          {tx.relatedExpenseId && `Despesa: ${tx.relatedExpenseId}`}
-                          {tx.relatedTransferId && `Transferência: ${tx.relatedTransferId}`}
-                          {!tx.relatedClosureId && !tx.relatedExpenseId && !tx.relatedTransferId && 'Lançamento manual'}
+                        <td className="py-3 px-4 text-slate-500 text-[11px] whitespace-nowrap">
+                          <div>{tx.responsibleName || 'Sistema'}</div>
+                          {tx.documentNumber && (
+                            <div className="text-[10px] text-slate-400 font-mono">
+                              Doc: {tx.documentNumber}
+                            </div>
+                          )}
                         </td>
                         <td className="py-3 px-4 text-center whitespace-nowrap">
                           <button
+                            type="button"
                             onClick={() => setTransactionToDelete(tx)}
                             className="p-1.5 rounded-lg hover:bg-rose-100 text-rose-600 hover:text-rose-900 transition cursor-pointer"
                             title="Excluir movimentação bancária"
@@ -585,7 +884,7 @@ export const HistoryView: React.FC = () => {
                 ) : (
                   <tr>
                     <td colSpan={9} className="py-8 text-center text-slate-400 text-xs">
-                      Nenhuma movimentação bancária localizada.
+                      Nenhuma movimentação bancária localizada com os filtros selecionados.
                     </td>
                   </tr>
                 )}

@@ -14,7 +14,8 @@ import {
   Tag,
   AlertCircle,
   X,
-  Barcode
+  Barcode,
+  Loader2
 } from 'lucide-react';
 
 const CATEGORIES: { key: CalendarCategory; label: string; color: string }[] = [
@@ -42,6 +43,16 @@ export const CalendarView: React.FC = () => {
   const [noteTime, setNoteTime] = useState('');
   const [category, setCategory] = useState<CalendarCategory>('conta');
   const [reminder, setReminder] = useState(true);
+  const [noteErrorMsg, setNoteErrorMsg] = useState('');
+  const [isSubmittingNote, setIsSubmittingNote] = useState(false);
+  const [toastMessage, setToastMessage] = useState('');
+  const [toastType, setToastType] = useState<'success' | 'error'>('success');
+
+  const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
+    setToastMessage(msg);
+    setToastType(type);
+    setTimeout(() => setToastMessage(''), 4000);
+  };
 
   // Calendar calculations
   const year = currentDate.getFullYear();
@@ -101,35 +112,63 @@ export const CalendarView: React.FC = () => {
     setNoteTime('');
     setCategory('conta');
     setReminder(true);
+    setNoteErrorMsg('');
     setIsModalOpen(true);
   };
 
   const handleSubmitNote = async (e: React.FormEvent) => {
     e.preventDefault();
+    e.stopPropagation();
+    setNoteErrorMsg('');
+
     if (!title.trim()) {
-      alert('Informe o título do compromisso.');
+      setNoteErrorMsg('Informe o título do compromisso.');
       return;
     }
 
+    setIsSubmittingNote(true);
     try {
       await createCalendarNote({
         title: title.trim(),
-        description: description.trim() || undefined,
+        description: description.trim() || '',
         date: noteDate,
-        time: noteTime || undefined,
+        time: noteTime || '',
         category,
         reminder,
         status: 'pendente',
       });
+      showToast('Lembrete salvo com sucesso!');
       setIsModalOpen(false);
       setSelectedDateStr(noteDate);
+      setTitle('');
+      setDescription('');
+      setNoteTime('');
     } catch (err: any) {
-      alert(err.message || 'Erro ao salvar anotação.');
+      console.error('Erro ao salvar anotação:', err);
+      setNoteErrorMsg(err.message || 'Erro ao salvar anotação.');
+    } finally {
+      setIsSubmittingNote(false);
     }
   };
 
   return (
     <div className="space-y-6">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div
+          className={`fixed top-4 right-4 z-50 flex items-center gap-2 px-4 py-3 rounded-xl text-white shadow-lg text-sm font-semibold animate-in fade-in slide-in-from-top-4 ${
+            toastType === 'error' ? 'bg-rose-700 border border-rose-600' : 'bg-emerald-800'
+          }`}
+        >
+          {toastType === 'error' ? (
+            <AlertCircle className="w-5 h-5 text-rose-200" />
+          ) : (
+            <CheckCircle2 className="w-5 h-5 text-amber-300" />
+          )}
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
       {/* Top Banner */}
       <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
@@ -452,6 +491,12 @@ export const CalendarView: React.FC = () => {
             </div>
 
             <form onSubmit={handleSubmitNote} className="p-6 space-y-4 text-xs">
+              {noteErrorMsg && (
+                <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl font-medium">
+                  {noteErrorMsg}
+                </div>
+              )}
+
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">
                   Título do Compromisso *
@@ -522,16 +567,19 @@ export const CalendarView: React.FC = () => {
               <div className="pt-2 flex justify-end gap-2 border-t border-slate-100">
                 <button
                   type="button"
+                  disabled={isSubmittingNote}
                   onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 font-semibold"
+                  className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 font-semibold hover:bg-slate-50 transition"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2.5 rounded-xl bg-emerald-800 hover:bg-emerald-900 text-white font-bold transition shadow-sm"
+                  disabled={isSubmittingNote}
+                  className="px-5 py-2.5 rounded-xl bg-emerald-800 hover:bg-emerald-900 disabled:opacity-50 text-white font-bold transition shadow-sm flex items-center gap-2"
                 >
-                  Salvar Lembrete
+                  {isSubmittingNote && <Loader2 className="w-4 h-4 animate-spin" />}
+                  <span>{isSubmittingNote ? 'Salvando...' : 'Salvar Lembrete'}</span>
                 </button>
               </div>
             </form>

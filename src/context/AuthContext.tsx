@@ -67,6 +67,34 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 const TOKEN_KEY = 'dmenos_auth_token';
 const SESSION_USER_KEY = 'dmenos_session_user';
 
+export function safeGetStorage(key: string): string | null {
+  try {
+    return typeof window !== 'undefined' && window.localStorage ? window.localStorage.getItem(key) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function safeSetStorage(key: string, value: string): void {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(key, value);
+    }
+  } catch (e) {
+    console.warn('Storage write failed:', e);
+  }
+}
+
+export function safeRemoveStorage(key: string): void {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.removeItem(key);
+    }
+  } catch (e) {
+    console.warn('Storage remove failed:', e);
+  }
+}
+
 // Web Crypto PBKDF2 hasher - 100% compatible with Node crypto.pbkdf2Sync(..., 100000, 64, 'sha512')
 export async function hashPasswordBrowser(password: string, salt: string): Promise<string> {
   const enc = new TextEncoder();
@@ -105,7 +133,7 @@ export function generateSalt(): string {
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
-  const [, setToken] = useState<string | null>(() => localStorage.getItem(TOKEN_KEY));
+  const [, setToken] = useState<string | null>(() => safeGetStorage(TOKEN_KEY));
   const [loading, setLoading] = useState(true);
   const [needsInitialSetup, setNeedsInitialSetup] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -134,7 +162,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // 2. Query Firestore as the single authoritative source of truth for both AI Studio and Vercel
       let snap;
       try {
-        snap = await getDocs(collection(db, 'app_users'));
+        const fetchPromise = getDocs(collection(db, 'app_users'));
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Tempo limite de conexão esgotado (10s).')), 10000)
+        );
+        snap = (await Promise.race([fetchPromise, timeoutPromise])) as any;
       } catch (fsErr: any) {
         console.error('CRITICAL: Firestore error querying app_users:', fsErr);
         // DO NOT assume database is empty on connection/network/permission error!
@@ -149,7 +181,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       const usersList: StoredUserDoc[] = [];
-      snap.forEach((d) => usersList.push(d.data() as StoredUserDoc));
+      snap.forEach((d: any) => usersList.push(d.data() as StoredUserDoc));
 
       const hasActiveAdmin = usersList.some((u) => u.role === 'admin' && u.status === 'active');
 
@@ -164,8 +196,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Admin exists in Firestore! Never ask for initial setup.
       setNeedsInitialSetup(false);
 
-      // 3. Verify saved session in localStorage
-      const savedSession = localStorage.getItem(SESSION_USER_KEY);
+      // 3. Verify saved session in storage
+      const savedSession = safeGetStorage(SESSION_USER_KEY);
       if (savedSession) {
         try {
           const sessionUser = JSON.parse(savedSession) as UserProfile;
@@ -185,17 +217,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             setCurrentUser(profile);
           } else {
             // User was removed, blocked, or altered
-            localStorage.removeItem(SESSION_USER_KEY);
-            localStorage.removeItem(TOKEN_KEY);
+            safeRemoveStorage(SESSION_USER_KEY);
+            safeRemoveStorage(TOKEN_KEY);
             setCurrentUser(null);
           }
         } catch (err) {
-          localStorage.removeItem(SESSION_USER_KEY);
+          safeRemoveStorage(SESSION_USER_KEY);
           setCurrentUser(null);
         }
       } else {
         // Also check server token if available
-        const savedToken = localStorage.getItem(TOKEN_KEY);
+        const savedToken = safeGetStorage(TOKEN_KEY);
         if (savedToken && isServerActive) {
           try {
             const meRes = await fetch('/api/auth/me', {
@@ -205,7 +237,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             if (meRes.ok && cType.includes('application/json')) {
               const meData = await meRes.json();
               setCurrentUser(meData.user);
-              localStorage.setItem(SESSION_USER_KEY, JSON.stringify(meData.user));
+              safeSetStorage(SESSION_USER_KEY, JSON.stringify(meData.user));
             }
           } catch (e) {
             console.warn('Server /me check failed:', e);
@@ -330,7 +362,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updatedAt: now,
       };
 
-      localStorage.setItem(SESSION_USER_KEY, JSON.stringify(profile));
+      safeSetStorage(SESSION_USER_KEY, JSON.stringify(profile));
       setCurrentUser(profile);
       setNeedsInitialSetup(false);
     } finally {
@@ -383,7 +415,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updatedAt: foundDoc.updatedAt,
       };
 
-      localStorage.setItem(SESSION_USER_KEY, JSON.stringify(profile));
+      safeSetStorage(SESSION_USER_KEY, JSON.stringify(profile));
       setCurrentUser(profile);
       setNeedsInitialSetup(false);
 
@@ -397,7 +429,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (res.ok) {
           const data = await res.json();
           if (data.token) {
-            localStorage.setItem(TOKEN_KEY, data.token);
+            safeSetStorage(TOKEN_KEY, data.token);
             setToken(data.token);
           }
         }
@@ -459,7 +491,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updatedAt: now,
       };
 
-      localStorage.setItem(SESSION_USER_KEY, JSON.stringify(profile));
+      safeSetStorage(SESSION_USER_KEY, JSON.stringify(profile));
       setCurrentUser(profile);
       setNeedsInitialSetup(false);
     } finally {
@@ -469,7 +501,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Logout
   const signOutApp = async () => {
-    const currentToken = localStorage.getItem(TOKEN_KEY);
+    const currentToken = safeGetStorage(TOKEN_KEY);
     if (currentToken) {
       try {
         await fetch('/api/auth/logout', {
@@ -480,8 +512,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // ignore
       }
     }
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(SESSION_USER_KEY);
+    safeRemoveStorage(TOKEN_KEY);
+    safeRemoveStorage(SESSION_USER_KEY);
     setCurrentUser(null);
     setToken(null);
     setSystemUsers([]);
@@ -536,7 +568,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     // Server dev sync (optional)
     try {
-      const currentToken = localStorage.getItem(TOKEN_KEY);
+      const currentToken = safeGetStorage(TOKEN_KEY);
       if (currentToken) {
         await fetch('/api/users', {
           method: 'POST',
@@ -610,7 +642,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updatedAt: now,
       };
       setCurrentUser(updatedProfile);
-      localStorage.setItem(SESSION_USER_KEY, JSON.stringify(updatedProfile));
+      safeSetStorage(SESSION_USER_KEY, JSON.stringify(updatedProfile));
     }
 
     await refreshUsers();

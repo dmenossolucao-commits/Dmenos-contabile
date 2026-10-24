@@ -24,8 +24,11 @@ import {
   CreditCard,
   QrCode,
   BellRing,
-  Barcode
+  Barcode,
+  Tag,
+  UserCheck
 } from 'lucide-react';
+import { getCategoryBadge } from './ExpensesValesView';
 
 interface DashboardProps {
   onNavigate: (tab: string) => void;
@@ -44,10 +47,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onNewVale,
   onNewBankTransaction,
 }) => {
-  const { closures, expenses, vales, boletos = [], bankAccounts, bankTransactions, calendarNotes } = useFinance();
+  const { closures, expenses, vales, boletos = [], bankAccounts, bankTransactions, calendarNotes, categories = [] } = useFinance();
   const { currentUser, isAdmin } = useAuth();
 
   const [period, setPeriod] = useState<PeriodFilter>('month');
+  const [dashboardCategoryTab, setDashboardCategoryTab] = useState<'despesas' | 'vales'>('despesas');
 
   // Boletos Due Date Alert for Dashboard
   const pendingBoletosAlert = useMemo(() => {
@@ -177,6 +181,33 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   // Expected Cash in Drawer right now
   const saldoAtualCaixaFisico = latestClosure ? latestClosure.countedCash : 0;
+
+  // Aggregates by Category for Expenses and Vales
+  const expensesByCategory = useMemo(() => {
+    const map: Record<string, { name: string; amount: number; count: number }> = {};
+    for (const exp of periodExpenses) {
+      const cat = exp.category?.trim() || 'Geral';
+      if (!map[cat]) {
+        map[cat] = { name: cat, amount: 0, count: 0 };
+      }
+      map[cat].amount += exp.amount;
+      map[cat].count += 1;
+    }
+    return Object.values(map).sort((a, b) => b.amount - a.amount);
+  }, [periodExpenses]);
+
+  const valesByCategory = useMemo(() => {
+    const map: Record<string, { name: string; amount: number; count: number }> = {};
+    for (const v of periodVales) {
+      const cat = v.category?.trim() || 'Adiantamento Quinzenal';
+      if (!map[cat]) {
+        map[cat] = { name: cat, amount: 0, count: 0 };
+      }
+      map[cat].amount += v.amount;
+      map[cat].count += 1;
+    }
+    return Object.values(map).sort((a, b) => b.amount - a.amount);
+  }, [periodVales]);
 
   // Upcoming Calendar Notes
   const upcomingNotes = useMemo(() => {
@@ -440,6 +471,182 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Section: Despesas e Vales por Categoria */}
+      <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <Tag className="w-5 h-5 text-emerald-800" />
+              <h2 className="text-base font-bold text-slate-900">
+                Distribuição por Categoria
+              </h2>
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Acompanhamento de despesas e vales no período ({dateRange.label})
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 self-start sm:self-auto">
+            {/* Tab switch */}
+            <div className="flex items-center bg-slate-100 p-1 rounded-xl">
+              <button
+                type="button"
+                onClick={() => setDashboardCategoryTab('despesas')}
+                className={`px-3 py-1 text-xs font-bold rounded-lg transition cursor-pointer flex items-center gap-1.5 ${
+                  dashboardCategoryTab === 'despesas'
+                    ? 'bg-white text-emerald-950 shadow-xs border border-slate-200/50'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <span>Despesas</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-emerald-100 text-emerald-900 font-bold">
+                  {expensesByCategory.length}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setDashboardCategoryTab('vales')}
+                className={`px-3 py-1 text-xs font-bold rounded-lg transition cursor-pointer flex items-center gap-1.5 ${
+                  dashboardCategoryTab === 'vales'
+                    ? 'bg-white text-amber-950 shadow-xs border border-slate-200/50'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <span>Vales</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-100 text-amber-900 font-bold">
+                  {valesByCategory.length}
+                </span>
+              </button>
+            </div>
+
+            <button
+              onClick={() => onNavigate('despesas')}
+              className="px-3 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+              title="Abrir gerenciador de categorias"
+            >
+              <Tag className="w-3.5 h-3.5 text-emerald-700" />
+              <span className="hidden sm:inline">Gerenciar</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Content for Despesas tab */}
+        {dashboardCategoryTab === 'despesas' && (
+          <div>
+            <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-100 mb-4 text-xs font-medium text-slate-700">
+              <span>Total em despesas no período:</span>
+              <span className="text-sm font-black text-rose-600">
+                {formatCurrency(totalDespesasPeriodo)}
+              </span>
+            </div>
+
+            {expensesByCategory.length === 0 ? (
+              <div className="p-8 text-center bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
+                <Tag className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                <p className="text-xs text-slate-500 font-medium">
+                  Nenhuma despesa registrada para o período selecionado ({dateRange.label}).
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {expensesByCategory.map((item) => {
+                  const badge = getCategoryBadge(item.name, categories);
+                  const pct = totalDespesasPeriodo > 0 ? (item.amount / totalDespesasPeriodo) * 100 : 0;
+                  return (
+                    <div key={item.name} className="p-3 rounded-xl bg-slate-50/70 border border-slate-200/70 hover:bg-slate-50 transition">
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <div className="flex items-center gap-2">
+                          <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold border ${badge.bg} ${badge.text} ${badge.border}`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${badge.dot}`} />
+                            {item.name}
+                          </span>
+                          <span className="text-[11px] text-slate-500 font-medium">
+                            {item.count} {item.count === 1 ? 'lançamento' : 'lançamentos'}
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-xs font-black text-slate-900 mr-2">
+                            {formatCurrency(item.amount)}
+                          </span>
+                          <span className="text-[11px] font-bold text-slate-500">
+                            {pct.toFixed(1)}%
+                          </span>
+                        </div>
+                      </div>
+                      {/* Bar */}
+                      <div className="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full ${badge.dot}`}
+                          style={{ width: `${Math.min(100, Math.max(2, pct))}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Content for Vales tab */}
+        {dashboardCategoryTab === 'vales' && (
+          <div>
+            <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-100 mb-4 text-xs font-medium text-slate-700">
+              <span>Total em vales no período:</span>
+              <span className="text-sm font-black text-amber-700">
+                {formatCurrency(totalValesPeriodo)}
+              </span>
+            </div>
+
+            {valesByCategory.length === 0 ? (
+              <div className="p-8 text-center bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
+                <UserCheck className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                <p className="text-xs text-slate-500 font-medium">
+                  Nenhum vale registrado para o período selecionado ({dateRange.label}).
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {valesByCategory.map((item) => {
+                  const badge = getCategoryBadge(item.name, categories);
+                  const pct = totalValesPeriodo > 0 ? (item.amount / totalValesPeriodo) * 100 : 0;
+                  return (
+                    <div key={item.name} className="p-3 rounded-xl bg-slate-50/70 border border-slate-200/70 hover:bg-slate-50 transition">
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <div className="flex items-center gap-2">
+                          <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold border ${badge.bg} ${badge.text} ${badge.border}`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${badge.dot}`} />
+                            {item.name}
+                          </span>
+                          <span className="text-[11px] text-slate-500 font-medium">
+                            {item.count} {item.count === 1 ? 'lançamento' : 'lançamentos'}
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-xs font-black text-slate-900 mr-2">
+                            {formatCurrency(item.amount)}
+                          </span>
+                          <span className="text-[11px] font-bold text-slate-500">
+                            {pct.toFixed(1)}%
+                          </span>
+                        </div>
+                      </div>
+                      {/* Bar */}
+                      <div className="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full ${badge.dot}`}
+                          style={{ width: `${Math.min(100, Math.max(2, pct))}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Two Column Section: Latest Closure Summary & Calendar Tasks */}

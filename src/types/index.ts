@@ -117,11 +117,24 @@ export interface Expense {
   updatedAt: string;
 }
 
+export interface FinancialCategory {
+  id: string;
+  name: string;
+  type: 'despesa' | 'vale';
+  color?: string;
+  description?: string;
+  isDefault?: boolean;
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Vale {
   id: string;
   employeeName: string;
   amount: number;
   date: string; // YYYY-MM-DD
+  category?: string; // Categoria do vale (ex: Adiantamento Salarial, Transporte, etc.)
   moneySource: MoneySource;
   bankAccountId?: string;
   bankAccountName?: string;
@@ -209,9 +222,14 @@ export interface BankTransaction {
   status: 'active' | 'cancelled';
   balanceAfter?: number;
   notes?: string;
+  documentNumber?: string;
+  responsibleName?: string;
   cancellationReason?: string;
+  cancelledBy?: string;
+  cancelledAt?: string;
   createdBy: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface Receivable {
@@ -262,7 +280,7 @@ export interface CalendarNote {
 export interface AuditLog {
   id: string;
   action: 'create' | 'update' | 'cancel' | 'reopen' | 'settle' | 'delete' | 'login' | 'password_reset';
-  entityType: 'closure' | 'expense' | 'vale' | 'boleto' | 'bank_account' | 'bank_transaction' | 'receivable' | 'calendar_note' | 'user' | 'auth' | 'audit_log';
+  entityType: 'closure' | 'expense' | 'vale' | 'boleto' | 'bank_account' | 'bank_transaction' | 'receivable' | 'calendar_note' | 'user' | 'auth' | 'audit_log' | 'category';
   entityId: string;
   details: string;
   userUid: string;

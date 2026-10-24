@@ -175,33 +175,23 @@ export const UsersSecurityView: React.FC = () => {
   // Toggle user blocked / active
   const handleToggleBlock = async (user: UserProfile) => {
     if (user.id === currentUser?.id) {
-      alert('Você não pode bloquear seu próprio usuário de administrador.');
+      setErrorMsg('Você não pode bloquear seu próprio usuário de administrador.');
       return;
     }
 
     const nextStatus = user.status === 'active' ? 'blocked' : 'active';
-    const actionLabel = nextStatus === 'blocked' ? 'bloquear' : 'desbloquear';
-
-    if (!confirm(`Deseja realmente ${actionLabel} o acesso do usuário "${user.username}"?`)) {
-      return;
-    }
-
     try {
       await updateUser(user.id, { status: nextStatus });
       showToast(`Usuário "${user.username}" ${nextStatus === 'blocked' ? 'bloqueado' : 'desbloqueado'}!`);
     } catch (err: any) {
-      alert(err.message || 'Erro ao alterar situação do usuário.');
+      setErrorMsg(err.message || 'Erro ao alterar situação do usuário.');
     }
   };
 
   // Delete User
   const handleDeleteUser = async (user: UserProfile) => {
     if (user.id === currentUser?.id) {
-      alert('Você não pode excluir sua própria conta.');
-      return;
-    }
-
-    if (!confirm(`Tem certeza de que deseja excluir permanentemente o acesso de "${user.username}"?`)) {
+      setErrorMsg('Você não pode excluir sua própria conta.');
       return;
     }
 
@@ -209,7 +199,7 @@ export const UsersSecurityView: React.FC = () => {
       await deleteUserAccount(user.id);
       showToast(`Usuário "${user.username}" excluído.`);
     } catch (err: any) {
-      alert(err.message || 'Erro ao excluir usuário.');
+      setErrorMsg(err.message || 'Erro ao excluir usuário.');
     }
   };
 

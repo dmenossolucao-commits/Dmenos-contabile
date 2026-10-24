@@ -255,6 +255,7 @@ export function generateExpensesReportPDF(expenses: Expense[], vales: Vale[], st
   const valeRows = activeVales.map((v) => [
     formatDateBR(v.date),
     v.employeeName,
+    v.category || 'Adiantamento',
     v.moneySource.toUpperCase(),
     v.status.toUpperCase(),
     v.settledDate ? formatDateBR(v.settledDate) : '-',
@@ -263,8 +264,8 @@ export function generateExpensesReportPDF(expenses: Expense[], vales: Vale[], st
 
   autoTable(doc, {
     startY: nextY + 5,
-    head: [['Data', 'Funcionário', 'Origem', 'Situação', 'Data Quitação', 'Valor']],
-    body: valeRows.length > 0 ? valeRows : [['Nenhum vale no período.', '', '', '', '', '']],
+    head: [['Data', 'Funcionário', 'Categoria', 'Origem', 'Situação', 'Data Quitação', 'Valor']],
+    body: valeRows.length > 0 ? valeRows : [['Nenhum vale no período.', '', '', '', '', '', '']],
     theme: 'grid',
     headStyles: { fillColor: [180, 83, 9], textColor: [255, 255, 255], fontSize: 8 },
     bodyStyles: { fontSize: 8 },
@@ -279,61 +280,196 @@ export function generateBankStatementPDF(
   account: BankAccount,
   transactions: BankTransaction[],
   startDate: string,
-  endDate: string
+  endDate: string,
+  typeFilter: string = 'all',
+  categoryFilter: string = 'all',
+  searchTerm: string = ''
 ) {
   const doc = createBaseDoc(
     `EXTRATO BANCÁRIO — ${account.name.toUpperCase()}`,
     `Banco: ${account.bankName} | Ag: ${account.agency || '-'} | Conta: ${account.accountNumberMasked} | Período: ${formatDateBR(startDate)} a ${formatDateBR(endDate)}`
   );
 
-  const filteredTrans = transactions.filter(
+  const validTrans = transactions.filter(
     (t) =>
       t.accountId === account.id &&
       t.status === 'active' &&
       !t.relatedClosureId &&
       t.category !== 'Saldo de Abertura' &&
-      !t.id?.startsWith('bt_init_') &&
-      t.date >= startDate &&
-      t.date <= endDate
+      !t.id?.startsWith('bt_init_')
   );
 
-  const totalEntradas = filteredTrans.filter((t) => t.amount > 0).reduce((acc, t) => acc + t.amount, 0);
-  const totalSaidas = filteredTrans.filter((t) => t.amount < 0).reduce((acc, t) => acc + Math.abs(t.amount), 0);
+  // Saldo imediatamente anterior ao período
+  const priorTrans = validTrans.filter((t) => t.date < startDate);
+  const initialPeriodBalance = account.initialBalance + priorTrans.reduce((acc, t) => acc + t.amount, 0);
 
-  let runningBalance = account.initialBalance;
-  // Calculate running balances
-  const rows = filteredTrans.map((t) => {
+  // Transações no período
+  let inPeriodTrans = validTrans.filter((t) => t.date >= startDate && t.date <= endDate);
+
+  if (typeFilter === 'entrada') inPeriodTrans = inPeriodTrans.filter((t) => t.amount > 0 && !t.type.includes('transferencia'));
+  else if (typeFilter === 'saida') inPeriodTrans = inPeriodTrans.filter((t) => t.amount < 0 && !t.type.includes('transferencia'));
+  else if (typeFilter === 'transferencia') inPeriodTrans = inPeriodTrans.filter((t) => t.type.includes('transferencia') || Boolean(t.relatedTransferId));
+
+  if (categoryFilter && categoryFilter !== 'all') {
+    inPeriodTrans = inPeriodTrans.filter((t) => t.category === categoryFilter);
+  }
+
+  if (searchTerm && searchTerm.trim()) {
+    const q = searchTerm.toLowerCase().trim();
+    inPeriodTrans = inPeriodTrans.filter(
+      (t) =>
+        t.description.toLowerCase().includes(q) ||
+        t.category.toLowerCase().includes(q) ||
+        (t.documentNumber && t.documentNumber.toLowerCase().includes(q)) ||
+        (t.responsibleName && t.responsibleName.toLowerCase().includes(q))
+    );
+  }
+
+  inPeriodTrans.sort((a, b) => {
+    const dateCmp = a.date.localeCompare(b.date);
+    if (dateCmp !== 0) return dateCmp;
+    return (a.createdAt || '').localeCompare(b.createdAt || '');
+  });
+
+  const totalEntradas = inPeriodTrans.filter((t) => t.amount > 0).reduce((acc, t) => acc + t.amount, 0);
+  const totalSaidas = inPeriodTrans.filter((t) => t.amount < 0).reduce((acc, t) => acc + Math.abs(t.amount), 0);
+  const finalPeriodBalance = initialPeriodBalance + totalEntradas - totalSaidas;
+
+  let runningBalance = initialPeriodBalance;
+  const rows = inPeriodTrans.map((t) => {
     runningBalance += t.amount;
     return [
       formatDateBR(t.date),
-      t.description,
+      t.description + (t.documentNumber ? ` (Doc: ${t.documentNumber})` : ''),
       t.category,
       t.type.replace('_', ' ').toUpperCase(),
       t.amount >= 0 ? formatCurrency(t.amount) : '-',
       t.amount < 0 ? formatCurrency(Math.abs(t.amount)) : '-',
       formatCurrency(runningBalance),
+      t.responsibleName || 'Sistema',
     ];
   });
 
   autoTable(doc, {
     startY: 44,
-    head: [['Data', 'Descrição', 'Categoria', 'Operação', 'Crédito (+)', 'Débito (-)', 'Saldo Acumulado']],
-    body: rows.length > 0 ? rows : [['Nenhuma movimentação no período.', '', '', '', '', '', formatCurrency(account.initialBalance)]],
+    head: [['Data', 'Descrição / Documento', 'Categoria', 'Operação', 'Entrada (+)', 'Saída (-)', 'Saldo Acumulado', 'Responsável']],
+    body: rows.length > 0 ? rows : [['Nenhuma movimentação localizada com os filtros selecionados.', '', '', '', '', '', formatCurrency(initialPeriodBalance), '']],
     foot: [
       [
-        'RESUMO',
+        'TOTAIS DO PERÍODO',
+        `Qtd: ${inPeriodTrans.length}`,
+        `Saldo Inicial: ${formatCurrency(initialPeriodBalance)}`,
         '',
-        '',
-        `Saldo Atual: ${formatCurrency(account.currentBalance)}`,
         `+ ${formatCurrency(totalEntradas)}`,
         `- ${formatCurrency(totalSaidas)}`,
-        `Saldo Final: ${formatCurrency(account.currentBalance)}`,
+        `Saldo Final: ${formatCurrency(finalPeriodBalance)}`,
+        '',
       ],
     ],
     theme: 'grid',
     headStyles: { fillColor: [6, 78, 59], textColor: [255, 255, 255], fontSize: 8 },
-    bodyStyles: { fontSize: 8 },
-    footStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42], fontStyle: 'bold', fontSize: 8 },
+    bodyStyles: { fontSize: 7.5 },
+    footStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42], fontStyle: 'bold', fontSize: 7.5 },
+  });
+
+  addFooter(doc);
+  return doc;
+}
+
+// 4b. Extrato Consolidado de Todos os Bancos
+export function generateConsolidatedBankStatementPDF(
+  accounts: BankAccount[],
+  transactions: BankTransaction[],
+  startDate: string,
+  endDate: string,
+  typeFilter: string = 'all',
+  searchTerm: string = ''
+) {
+  const doc = createBaseDoc(
+    'EXTRATO BANCÁRIO CONSOLIDADO — TODOS OS BANCOS',
+    `Contas: ${accounts.map((a) => a.name).join(', ')} | Período: ${formatDateBR(startDate)} a ${formatDateBR(endDate)}`
+  );
+
+  const validTrans = transactions.filter(
+    (t) =>
+      t.status === 'active' &&
+      !t.relatedClosureId &&
+      t.category !== 'Saldo de Abertura' &&
+      !t.id?.startsWith('bt_init_')
+  );
+
+  let totalInitialBalance = accounts.reduce((acc, a) => acc + a.initialBalance, 0);
+  const priorTrans = validTrans.filter((t) => t.date < startDate);
+  totalInitialBalance += priorTrans.reduce((acc, t) => acc + t.amount, 0);
+
+  let inPeriodTrans = validTrans.filter((t) => t.date >= startDate && t.date <= endDate);
+
+  if (typeFilter === 'entrada') inPeriodTrans = inPeriodTrans.filter((t) => t.amount > 0 && !t.type.includes('transferencia'));
+  else if (typeFilter === 'saida') inPeriodTrans = inPeriodTrans.filter((t) => t.amount < 0 && !t.type.includes('transferencia'));
+  else if (typeFilter === 'transferencia') inPeriodTrans = inPeriodTrans.filter((t) => t.type.includes('transferencia') || Boolean(t.relatedTransferId));
+
+  if (searchTerm && searchTerm.trim()) {
+    const q = searchTerm.toLowerCase().trim();
+    inPeriodTrans = inPeriodTrans.filter(
+      (t) =>
+        t.description.toLowerCase().includes(q) ||
+        t.category.toLowerCase().includes(q) ||
+        (t.documentNumber && t.documentNumber.toLowerCase().includes(q))
+    );
+  }
+
+  inPeriodTrans.sort((a, b) => a.date.localeCompare(b.date));
+
+  // External operations (excluding internal transfers)
+  const externalEntradas = inPeriodTrans
+    .filter((t) => t.amount > 0 && !t.type.includes('transferencia') && !t.relatedTransferId)
+    .reduce((acc, t) => acc + t.amount, 0);
+
+  const externalSaidas = inPeriodTrans
+    .filter((t) => t.amount < 0 && !t.type.includes('transferencia') && !t.relatedTransferId)
+    .reduce((acc, t) => acc + Math.abs(t.amount), 0);
+
+  const totalTransferencias = inPeriodTrans
+    .filter((t) => t.amount > 0 && (t.type.includes('transferencia') || Boolean(t.relatedTransferId)))
+    .reduce((acc, t) => acc + t.amount, 0);
+
+  const finalConsolidatedBalance = totalInitialBalance + externalEntradas - externalSaidas;
+
+  const rows = inPeriodTrans.map((t) => {
+    const acc = accounts.find((a) => a.id === t.accountId);
+    const isInternal = t.type.includes('transferencia') || Boolean(t.relatedTransferId);
+    return [
+      formatDateBR(t.date),
+      acc ? acc.name : 'Conta',
+      t.description,
+      t.category,
+      isInternal ? 'Transf. Interna' : t.amount >= 0 ? 'Entrada' : 'Saída',
+      t.amount >= 0 ? formatCurrency(t.amount) : '-',
+      t.amount < 0 ? formatCurrency(Math.abs(t.amount)) : '-',
+      t.responsibleName || 'Sistema',
+    ];
+  });
+
+  autoTable(doc, {
+    startY: 44,
+    head: [['Data', 'Conta', 'Descrição', 'Categoria', 'Tipo', 'Entrada (+)', 'Saída (-)', 'Responsável']],
+    body: rows.length > 0 ? rows : [['Nenhuma movimentação bancária no período.', '', '', '', '', '', '', '']],
+    foot: [
+      [
+        'TOTAIS CONSOLIDADOS',
+        `Saldo Inicial: ${formatCurrency(totalInitialBalance)}`,
+        `Transf. Internas: ${formatCurrency(totalTransferencias)}`,
+        '',
+        '',
+        `+ ${formatCurrency(externalEntradas)}`,
+        `- ${formatCurrency(externalSaidas)}`,
+        `Saldo Final: ${formatCurrency(finalConsolidatedBalance)}`,
+      ],
+    ],
+    theme: 'grid',
+    headStyles: { fillColor: [6, 78, 59], textColor: [255, 255, 255], fontSize: 8 },
+    bodyStyles: { fontSize: 7.5 },
+    footStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42], fontStyle: 'bold', fontSize: 7.5 },
   });
 
   addFooter(doc);

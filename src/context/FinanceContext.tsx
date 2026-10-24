@@ -13,9 +13,9 @@ import {
   orderBy,
   where
 } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../firebase';
+import { db, handleFirestoreError, OperationType, sanitizeForFirestore } from '../firebase';
 import { useAuth } from './AuthContext';
-import { computeBankAccountBalance } from '../utils/formatters';
+import { computeBankAccountBalance, formatCurrency } from '../utils/formatters';
 import {
   DailyClosure,
   Expense,
@@ -27,7 +27,8 @@ import {
   CalendarNote,
   AuditLog,
   UserProfile,
-  UserRole
+  UserRole,
+  FinancialCategory
 } from '../types';
 
 interface FinanceContextType {
@@ -35,6 +36,9 @@ interface FinanceContextType {
   expenses: Expense[];
   vales: Vale[];
   boletos: Boleto[];
+  categories: FinancialCategory[];
+  expenseCategories: string[];
+  valeCategories: string[];
   bankAccounts: BankAccount[];
   bankTransactions: BankTransaction[];
   receivables: Receivable[];
@@ -62,6 +66,11 @@ interface FinanceContextType {
   settleVale: (valeId: string, method: string, notes?: string) => Promise<void>;
   cancelVale: (valeId: string, reason: string) => Promise<void>;
 
+  // Category Actions
+  createCategory: (data: { name: string; type: 'despesa' | 'vale'; color?: string; description?: string }) => Promise<string>;
+  updateCategory: (id: string, data: Partial<FinancialCategory>) => Promise<void>;
+  deleteCategory: (id: string) => Promise<void>;
+
   createBoleto: (data: Omit<Boleto, 'id' | 'createdAt' | 'updatedAt' | 'createdBy' | 'status'>) => Promise<string>;
   payBoleto: (
     boletoId: string,
@@ -78,9 +87,12 @@ interface FinanceContextType {
 
   createBankAccount: (data: Omit<BankAccount, 'id' | 'createdAt' | 'updatedAt' | 'currentBalance'>) => Promise<string>;
   updateBankAccount: (id: string, data: Partial<BankAccount>) => Promise<void>;
+  deleteBankAccount: (id: string, reason?: string) => Promise<void>;
+  deactivateBankAccount: (id: string, reason?: string) => Promise<void>;
+  reactivateBankAccount: (id: string) => Promise<void>;
   createBankTransaction: (data: Omit<BankTransaction, 'id' | 'createdAt' | 'createdBy' | 'balanceAfter'>) => Promise<string>;
   cancelBankTransaction: (transactionId: string, reason: string) => Promise<void>;
-  transferBetweenAccounts: (fromId: string, toId: string, amount: number, date: string, description: string, notes?: string) => Promise<void>;
+  transferBetweenAccounts: (fromId: string, toId: string, amount: number, date: string, description: string, notes?: string, documentNumber?: string) => Promise<void>;
   confirmReceivableCredit: (receivableId: string, accountId: string, creditDate: string, notes?: string) => Promise<void>;
 
   createCalendarNote: (data: Omit<CalendarNote, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'>) => Promise<string>;
@@ -100,6 +112,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [vales, setVales] = useState<Vale[]>([]);
   const [boletos, setBoletos] = useState<Boleto[]>([]);
+  const [categories, setCategories] = useState<FinancialCategory[]>([]);
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [bankTransactions, setBankTransactions] = useState<BankTransaction[]>([]);
   const [receivables, setReceivables] = useState<Receivable[]>([]);
@@ -108,6 +121,42 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [systemUsers, setSystemUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeBankAccount, setActiveBankAccount] = useState<BankAccount | null>(null);
+
+  // Derived category lists with built-in fallbacks
+  const expenseCategories = useMemo(() => {
+    const list = categories.filter((c) => c.type === 'despesa').map((c) => c.name);
+    if (list.length === 0) {
+      return [
+        'Compra de mercadorias',
+        'Fornecedor',
+        'Água',
+        'Energia',
+        'Internet',
+        'Aluguel',
+        'Transporte',
+        'Manutenção',
+        'Embalagens',
+        'Limpeza',
+        'Outras despesas',
+      ];
+    }
+    return list;
+  }, [categories]);
+
+  const valeCategories = useMemo(() => {
+    const list = categories.filter((c) => c.type === 'vale').map((c) => c.name);
+    if (list.length === 0) {
+      return [
+        'Adiantamento Salarial',
+        'Alimentação / Refeição',
+        'Transporte / Combustível',
+        'Emergência / Saúde',
+        'Comissão / Bônus',
+        'Outro Vale',
+      ];
+    }
+    return list;
+  }, [categories]);
 
   // Helper to log audit events
   const logAudit = useCallback(
@@ -129,7 +178,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
           userUsername: currentUser?.username || currentUser?.displayName || 'desconhecido',
           createdAt: new Date().toISOString(),
         };
-        await setDoc(doc(db, 'audit_logs', logId), logData);
+        await setDoc(doc(db, 'audit_logs', logId), sanitizeForFirestore(logData));
       } catch (err) {
         console.warn('Audit log write warning:', err);
       }
@@ -137,13 +186,13 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     [currentUser]
   );
 
-  // Initial Seed for fresh database (bank accounts & welcome note)
+  // Initial Seed for fresh database (bank accounts, categories & welcome note)
   const seedDefaultsIfEmpty = useCallback(async () => {
     if (!currentUser) return;
     try {
+      // 1. Bank Accounts
       const bankAccountsSnap = await getDocs(collection(db, 'bank_accounts'));
       if (bankAccountsSnap.empty) {
-        // Seed default Banco Principal
         const defaultBankId = 'acc_principal';
         const defaultBank: BankAccount = {
           id: defaultBankId,
@@ -162,7 +211,6 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         };
         await setDoc(doc(db, 'bank_accounts', defaultBankId), defaultBank);
 
-        // Seed default Calendar Note
         const noteId = 'note_boas_vindas';
         const welcomeNote: CalendarNote = {
           id: noteId,
@@ -178,6 +226,60 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         };
         await setDoc(doc(db, 'calendar_notes', noteId), welcomeNote);
       }
+
+      // 2. Categories
+      const categoriesSnap = await getDocs(collection(db, 'categories'));
+      if (categoriesSnap.empty) {
+        const defaultExp = [
+          'Compra de mercadorias',
+          'Fornecedor',
+          'Água',
+          'Energia',
+          'Internet',
+          'Aluguel',
+          'Transporte',
+          'Manutenção',
+          'Embalagens',
+          'Limpeza',
+          'Outras despesas',
+        ];
+        const defaultVales = [
+          'Adiantamento Salarial',
+          'Alimentação / Refeição',
+          'Transporte / Combustível',
+          'Emergência / Saúde',
+          'Comissão / Bônus',
+          'Outro Vale',
+        ];
+
+        const batch = writeBatch(db);
+        const now = new Date().toISOString();
+        defaultExp.forEach((name, i) => {
+          const id = 'cat_exp_' + i;
+          batch.set(doc(db, 'categories', id), {
+            id,
+            name,
+            type: 'despesa',
+            color: 'emerald',
+            isDefault: true,
+            createdAt: now,
+            updatedAt: now,
+          });
+        });
+        defaultVales.forEach((name, i) => {
+          const id = 'cat_vale_' + i;
+          batch.set(doc(db, 'categories', id), {
+            id,
+            name,
+            type: 'vale',
+            color: 'amber',
+            isDefault: true,
+            createdAt: now,
+            updatedAt: now,
+          });
+        });
+        await batch.commit();
+      }
     } catch (e) {
       console.warn('Seeding note:', e);
     }
@@ -189,6 +291,8 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setClosures([]);
       setExpenses([]);
       setVales([]);
+      setBoletos([]);
+      setCategories([]);
       setBankAccounts([]);
       setBankTransactions([]);
       setReceivables([]);
@@ -240,6 +344,16 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setBoletos(items);
       },
       (error) => handleFirestoreError(error, OperationType.GET, 'boletos')
+    );
+
+    const unsubCategories = onSnapshot(
+      collection(db, 'categories'),
+      (snapshot) => {
+        const items = snapshot.docs.map((d) => d.data() as FinancialCategory);
+        items.sort((a, b) => a.name.localeCompare(b.name));
+        setCategories(items);
+      },
+      (error) => handleFirestoreError(error, OperationType.GET, 'categories')
     );
 
     const unsubAccounts = onSnapshot(
@@ -312,6 +426,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
       unsubExpenses();
       unsubVales();
       unsubBoletos();
+      unsubCategories();
       unsubAccounts();
       unsubTransactions();
       unsubReceivables();
@@ -392,7 +507,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     try {
       // Save closure document strictly into 'closures'
-      await setDoc(doc(db, 'closures', id), newClosure);
+      await setDoc(doc(db, 'closures', id), sanitizeForFirestore(newClosure));
 
       await logAudit(
         'create',
@@ -533,7 +648,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     };
 
     try {
-      await setDoc(doc(db, 'expenses', id), newExpense);
+      await setDoc(doc(db, 'expenses', id), sanitizeForFirestore(newExpense));
 
       // If money source is bank, create a bank transaction debit
       if (data.moneySource === 'banco' && data.bankAccountId && data.amount > 0) {
@@ -551,7 +666,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
           createdBy: currentUser?.id || '',
           createdAt: now,
         };
-        await setDoc(doc(db, 'bank_transactions', transId), trans);
+        await setDoc(doc(db, 'bank_transactions', transId), sanitizeForFirestore(trans));
         await syncAccountBalance(data.bankAccountId);
       }
 
@@ -629,7 +744,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     };
 
     try {
-      await setDoc(doc(db, 'vales', id), newVale);
+      await setDoc(doc(db, 'vales', id), sanitizeForFirestore(newVale));
 
       if (data.moneySource === 'banco' && data.bankAccountId && data.amount > 0) {
         const transId = 'bt_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4);
@@ -637,15 +752,15 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
           id: transId,
           accountId: data.bankAccountId,
           date: data.date,
-          description: `Vale Funcionário: ${data.employeeName}`,
-          category: 'Vale de funcionário',
+          description: `Vale Funcionário: ${data.employeeName}${data.category ? ` (${data.category})` : ''}`,
+          category: data.category || 'Vale de funcionário',
           amount: -Math.abs(data.amount),
           type: 'pagamento',
           status: 'active',
           createdBy: currentUser?.id || '',
           createdAt: now,
         };
-        await setDoc(doc(db, 'bank_transactions', transId), trans);
+        await setDoc(doc(db, 'bank_transactions', transId), sanitizeForFirestore(trans));
         await syncAccountBalance(data.bankAccountId);
       }
 
@@ -653,7 +768,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         'create',
         'vale',
         id,
-        `Vale registrado para ${data.employeeName} no valor de R$ ${data.amount.toFixed(2)} (Status: ${data.status})`
+        `Vale registrado para ${data.employeeName}${data.category ? ` [${data.category}]` : ''} no valor de R$ ${data.amount.toFixed(2)} (Status: ${data.status})`
       );
 
       return id;
@@ -703,6 +818,139 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
+  // 8c. CATEGORY MANAGEMENT (DESPESAS E VALES)
+  const createCategory = async (data: {
+    name: string;
+    type: 'despesa' | 'vale';
+    color?: string;
+    description?: string;
+  }): Promise<string> => {
+    const cleanName = data.name.trim();
+    if (!cleanName) throw new Error('O nome da categoria é obrigatório.');
+
+    const exists = categories.some(
+      (c) => c.type === data.type && c.name.toLowerCase() === cleanName.toLowerCase()
+    );
+    if (exists) {
+      throw new Error(`Já existe uma categoria de ${data.type} com o nome "${cleanName}".`);
+    }
+
+    const id = `cat_${data.type}_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
+    const now = new Date().toISOString();
+    const newCategory: FinancialCategory = {
+      id,
+      name: cleanName,
+      type: data.type,
+      color: data.color || (data.type === 'despesa' ? 'emerald' : 'amber'),
+      description: data.description?.trim() || '',
+      isDefault: false,
+      createdBy: currentUser?.id || '',
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    try {
+      await setDoc(doc(db, 'categories', id), sanitizeForFirestore(newCategory));
+      await logAudit(
+        'create',
+        'category',
+        id,
+        `Categoria de ${data.type} criada: "${cleanName}"`
+      );
+      return id;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `categories/${id}`);
+      throw error;
+    }
+  };
+
+  const updateCategory = async (
+    id: string,
+    data: Partial<FinancialCategory>
+  ): Promise<void> => {
+    try {
+      const catRef = doc(db, 'categories', id);
+      const catSnap = await getDoc(catRef);
+      if (!catSnap.exists()) throw new Error('Categoria não encontrada.');
+      const oldCat = catSnap.data() as FinancialCategory;
+      const now = new Date().toISOString();
+
+      const newName = data.name ? data.name.trim() : oldCat.name;
+      if (!newName) throw new Error('O nome da categoria não pode ser vazio.');
+
+      if (newName.toLowerCase() !== oldCat.name.toLowerCase()) {
+        const exists = categories.some(
+          (c) => c.id !== id && c.type === oldCat.type && c.name.toLowerCase() === newName.toLowerCase()
+        );
+        if (exists) {
+          throw new Error(`Já existe uma categoria de ${oldCat.type} chamada "${newName}".`);
+        }
+      }
+
+      const updatePayload: Partial<FinancialCategory> = {
+        ...data,
+        name: newName,
+        updatedAt: now,
+      };
+
+      await updateDoc(catRef, sanitizeForFirestore(updatePayload));
+
+      // Propaga a atualização do nome para despesas ou vales existentes
+      if (newName !== oldCat.name) {
+        if (oldCat.type === 'despesa') {
+          const matchingExpenses = expenses.filter((e) => e.category === oldCat.name);
+          if (matchingExpenses.length > 0) {
+            const batch = writeBatch(db);
+            matchingExpenses.forEach((exp) => {
+              batch.update(doc(db, 'expenses', exp.id), { category: newName, updatedAt: now });
+            });
+            await batch.commit();
+          }
+        } else if (oldCat.type === 'vale') {
+          const matchingVales = vales.filter((v) => v.category === oldCat.name);
+          if (matchingVales.length > 0) {
+            const batch = writeBatch(db);
+            matchingVales.forEach((vale) => {
+              batch.update(doc(db, 'vales', vale.id), { category: newName, updatedAt: now });
+            });
+            await batch.commit();
+          }
+        }
+      }
+
+      await logAudit(
+        'update',
+        'category',
+        id,
+        `Categoria de ${oldCat.type} alterada de "${oldCat.name}" para "${newName}"`
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `categories/${id}`);
+      throw error;
+    }
+  };
+
+  const deleteCategory = async (id: string): Promise<void> => {
+    try {
+      const catRef = doc(db, 'categories', id);
+      const catSnap = await getDoc(catRef);
+      if (!catSnap.exists()) return;
+      const cat = catSnap.data() as FinancialCategory;
+
+      await deleteDoc(catRef);
+
+      await logAudit(
+        'delete',
+        'category',
+        id,
+        `Categoria de ${cat.type} "${cat.name}" excluída.`
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `categories/${id}`);
+      throw error;
+    }
+  };
+
   // 8b. BOLETOS COM AVISO DE VENCIMENTO
   const createBoleto = async (
     data: Omit<Boleto, 'id' | 'createdAt' | 'updatedAt' | 'createdBy' | 'status'>
@@ -718,7 +966,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         createdAt: now,
         updatedAt: now,
       };
-      await setDoc(doc(db, 'boletos', id), newBoleto);
+      await setDoc(doc(db, 'boletos', id), sanitizeForFirestore(newBoleto));
       await logAudit(
         'create',
         'boleto',
@@ -869,7 +1117,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     };
 
     try {
-      await setDoc(doc(db, 'bank_accounts', id), newAccount);
+      await setDoc(doc(db, 'bank_accounts', id), sanitizeForFirestore(newAccount));
 
       await logAudit(
         'create',
@@ -889,13 +1137,178 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const now = new Date().toISOString();
     try {
       const accRef = doc(db, 'bank_accounts', id);
-      await updateDoc(accRef, {
+      await updateDoc(accRef, sanitizeForFirestore({
         ...data,
         updatedAt: now,
-      });
+      }));
+      await syncAccountBalance(id);
       await logAudit('update', 'bank_account', id, `Conta bancária ${id} atualizada.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `bank_accounts/${id}`);
+    }
+  };
+
+  // 10b. DEACTIVATE BANK ACCOUNT (PRESERVES HISTORICAL TRANSACTIONS, AUDIT AND STATEMENTS)
+  const deactivateBankAccount = async (id: string, reason?: string): Promise<void> => {
+    const hasAdminPermission = isAdmin || currentUser?.role === 'admin';
+    if (!hasAdminPermission) {
+      throw new Error('Apenas administradores têm permissão para desativar contas bancárias.');
+    }
+
+    const acc = bankAccounts.find((a) => a.id === id);
+    if (!acc) throw new Error('Conta bancária não encontrada.');
+
+    // 1. Balance must be exactly zero before deactivation
+    const { currentBalance } = computeBankAccountBalance(acc, bankTransactions);
+    if (Math.abs(currentBalance) > 0.009) {
+      throw new Error(
+        `Não é permitido desativar uma conta com saldo diferente de zero (Saldo atual: ${formatCurrency(
+          currentBalance
+        )}). Transfira ou regularize o saldo para R$ 0,00 antes de desativar.`
+      );
+    }
+
+    // 2. Cannot deactivate if pending receivables or boletos linked to this account
+    const hasPendingReceivables = receivables.some(
+      (r) => r.targetAccountId === id && r.status === 'pendente'
+    );
+    if (hasPendingReceivables) {
+      throw new Error('A conta possui recebíveis pendentes de liquidação. Confirme ou altere a conta dos recebíveis antes de desativar.');
+    }
+
+    const hasPendingBoletos = boletos.some(
+      (b) => b.bankAccountId === id && b.status === 'pendente'
+    );
+    if (hasPendingBoletos) {
+      throw new Error('A conta possui boletos agendados com pagamento pendente. Altere a conta prevista dos boletos antes de desativar.');
+    }
+
+    const now = new Date().toISOString();
+    try {
+      await updateDoc(doc(db, 'bank_accounts', id), sanitizeForFirestore({
+        status: 'inactive',
+        updatedAt: now,
+      }));
+
+      setBankAccounts((prev) =>
+        prev.map((a) => (a.id === id ? { ...a, status: 'inactive', updatedAt: now } : a))
+      );
+
+      if (activeBankAccount?.id === id) {
+        const nextActive = bankAccounts.find((a) => a.id !== id && a.status === 'active');
+        setActiveBankAccount(nextActive || null);
+      }
+
+      await logAudit(
+        'update',
+        'bank_account',
+        id,
+        `Conta bancária "${acc.name}" (${acc.bankName} - ${acc.accountNumberMasked}) desativada com sucesso. Extrato e histórico financeiro preservados.${
+          reason ? ` Motivo: ${reason}` : ''
+        }`
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `bank_accounts/${id}`);
+    }
+  };
+
+  // 10c. REACTIVATE BANK ACCOUNT
+  const reactivateBankAccount = async (id: string): Promise<void> => {
+    const hasAdminPermission = isAdmin || currentUser?.role === 'admin';
+    if (!hasAdminPermission) {
+      throw new Error('Apenas administradores têm permissão para reativar contas bancárias.');
+    }
+
+    const acc = bankAccounts.find((a) => a.id === id);
+    if (!acc) throw new Error('Conta bancária não encontrada.');
+
+    const now = new Date().toISOString();
+    try {
+      await updateDoc(doc(db, 'bank_accounts', id), sanitizeForFirestore({
+        status: 'active',
+        updatedAt: now,
+      }));
+
+      setBankAccounts((prev) =>
+        prev.map((a) => (a.id === id ? { ...a, status: 'active', updatedAt: now } : a))
+      );
+
+      await logAudit(
+        'update',
+        'bank_account',
+        id,
+        `Conta bancária "${acc.name}" (${acc.bankName} - ${acc.accountNumberMasked}) reativada com sucesso.`
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `bank_accounts/${id}`);
+    }
+  };
+
+  // 10d. DELETE BANK ACCOUNT (ONLY ALLOWED IF NO TRANSACTIONS AND ZERO BALANCE)
+  const deleteBankAccount = async (id: string, reason?: string): Promise<void> => {
+    const hasAdminPermission = isAdmin || currentUser?.role === 'admin';
+    if (!hasAdminPermission) {
+      throw new Error('Apenas administradores têm permissão para excluir contas bancárias.');
+    }
+
+    const acc = bankAccounts.find((a) => a.id === id);
+    if (!acc) throw new Error('Conta bancária não encontrada.');
+
+    // 1. Balance must be zero
+    const { currentBalance } = computeBankAccountBalance(acc, bankTransactions);
+    if (Math.abs(currentBalance) > 0.009) {
+      throw new Error(
+        `Não é permitido excluir uma conta com saldo diferente de zero (Saldo atual: ${formatCurrency(
+          currentBalance
+        )}). Regularize ou transfira o saldo para R$ 0,00 antes de prosseguir.`
+      );
+    }
+
+    // 2. Must not have any historical transactions or opening balance
+    const relatedTxs = bankTransactions.filter(
+      (t) => t.accountId === id || t.relatedAccountId === id
+    );
+    const hasInitialBalance = (acc.initialBalance || 0) > 0;
+    if (relatedTxs.length > 0 || hasInitialBalance) {
+      throw new Error(
+        'Esta conta possui movimentações financeiras registradas. Para proteger a integridade da auditoria contábil e do histórico, utilize a opção "Desativar conta bancária".'
+      );
+    }
+
+    // 3. Must not have pending items
+    const hasPendingReceivables = receivables.some(
+      (r) => r.targetAccountId === id && r.status === 'pendente'
+    );
+    if (hasPendingReceivables) {
+      throw new Error('A conta possui recebíveis pendentes de liquidação. Regularize os recebíveis antes de excluir.');
+    }
+
+    const hasPendingBoletos = boletos.some(
+      (b) => b.bankAccountId === id && b.status === 'pendente'
+    );
+    if (hasPendingBoletos) {
+      throw new Error('A conta está vinculada a boletos pendentes. Regularize os boletos antes de excluir.');
+    }
+
+    try {
+      await deleteDoc(doc(db, 'bank_accounts', id));
+      setBankAccounts((prev) => prev.filter((a) => a.id !== id));
+
+      if (activeBankAccount?.id === id) {
+        const nextActive = bankAccounts.find((a) => a.id !== id && a.status === 'active');
+        setActiveBankAccount(nextActive || null);
+      }
+
+      await logAudit(
+        'delete',
+        'bank_account',
+        id,
+        `Conta bancária "${acc.name}" (${acc.bankName} - ${acc.accountNumberMasked}) excluída definitivamente.${
+          reason ? ` Motivo: ${reason}` : ''
+        }`
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `bank_accounts/${id}`);
     }
   };
 
@@ -903,26 +1316,31 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const createBankTransaction = async (
     data: Omit<BankTransaction, 'id' | 'createdAt' | 'createdBy' | 'balanceAfter'>
   ): Promise<string> => {
+    if (!data.amount || data.amount === 0) {
+      throw new Error('O valor da movimentação deve ser maior que zero.');
+    }
     const id = 'bt_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4);
     const now = new Date().toISOString();
+    const responsible = currentUser?.displayName || currentUser?.username || 'Responsável';
 
     const newTrans: BankTransaction = {
       ...data,
       id,
       status: 'active',
+      responsibleName: data.responsibleName || responsible,
       createdBy: currentUser?.id || '',
       createdAt: now,
     };
 
     try {
-      await setDoc(doc(db, 'bank_transactions', id), newTrans);
+      await setDoc(doc(db, 'bank_transactions', id), sanitizeForFirestore(newTrans));
       await syncAccountBalance(data.accountId);
 
       await logAudit(
         'create',
         'bank_transaction',
         id,
-        `Movimentação bancária registrada na conta ${data.accountId}: "${data.description}" - R$ ${data.amount.toFixed(2)} (${data.type})`
+        `Movimentação bancária registrada na conta ${data.accountId}: "${data.description}" - R$ ${Math.abs(data.amount).toFixed(2)} (${data.type})`
       );
 
       return id;
@@ -934,19 +1352,15 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
   // CANCEL / ESTORNAR MOVIMENTAÇÃO BANCÁRIA
   const cancelBankTransaction = async (transactionId: string, reason: string): Promise<void> => {
     const now = new Date().toISOString();
+    const cancelledByName = currentUser?.displayName || currentUser?.username || 'Usuário';
+
     try {
       const transRef = doc(db, 'bank_transactions', transactionId);
       const transSnap = await getDoc(transRef);
       if (!transSnap.exists()) throw new Error('Movimentação bancária não encontrada.');
       const transData = transSnap.data() as BankTransaction;
 
-      await updateDoc(transRef, {
-        status: 'cancelled',
-        cancellationReason: reason,
-        updatedAt: now,
-      });
-
-      // Se fazia parte de transferência entre contas, cancela a contrapartida também
+      // Se fazia parte de transferência entre contas, cancela ambas as pontas atomicamente
       if (transData.relatedTransferId) {
         const pairedQuery = query(
           collection(db, 'bank_transactions'),
@@ -954,20 +1368,36 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
           where('status', '==', 'active')
         );
         const pairedSnap = await getDocs(pairedQuery);
-        for (const pDoc of pairedSnap.docs) {
-          if (pDoc.id !== transactionId) {
-            await updateDoc(doc(db, 'bank_transactions', pDoc.id), {
-              status: 'cancelled',
-              cancellationReason: `Estorno de transferência: ${reason}`,
-              updatedAt: now,
-            });
-            const pData = pDoc.data() as BankTransaction;
-            await syncAccountBalance(pData.accountId);
-          }
-        }
-      }
+        const batch = writeBatch(db);
+        const accountsToSync = new Set<string>();
 
-      await syncAccountBalance(transData.accountId);
+        pairedSnap.docs.forEach((pDoc) => {
+          const pData = pDoc.data() as BankTransaction;
+          accountsToSync.add(pData.accountId);
+          batch.update(doc(db, 'bank_transactions', pDoc.id), {
+            status: 'cancelled',
+            cancellationReason: `Estorno de transferência: ${reason}`,
+            cancelledBy: cancelledByName,
+            cancelledAt: now,
+            updatedAt: now,
+          });
+        });
+
+        await batch.commit();
+
+        for (const accId of accountsToSync) {
+          await syncAccountBalance(accId);
+        }
+      } else {
+        await updateDoc(transRef, {
+          status: 'cancelled',
+          cancellationReason: reason,
+          cancelledBy: cancelledByName,
+          cancelledAt: now,
+          updatedAt: now,
+        });
+        await syncAccountBalance(transData.accountId);
+      }
 
       await logAudit(
         'cancel',
@@ -1105,14 +1535,15 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
-  // 12. TRANSFER BETWEEN ACCOUNTS (DEBIT ORIGIN, CREDIT DESTINATION, ZERO REVENUE/EXPENSE IMPACT)
+  // 12. TRANSFER BETWEEN ACCOUNTS (ATOMIC BATCH: DEBIT ORIGIN, CREDIT DESTINATION, ZERO REVENUE/EXPENSE IMPACT)
   const transferBetweenAccounts = async (
     fromId: string,
     toId: string,
     amount: number,
     date: string,
     description: string,
-    notes?: string
+    notes?: string,
+    documentNumber?: string
   ): Promise<void> => {
     if (fromId === toId) {
       throw new Error('A conta de origem não pode ser igual à conta de destino.');
@@ -1121,23 +1552,40 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
       throw new Error('O valor da transferência deve ser maior que zero.');
     }
 
-    const transferId = 'trf_' + Date.now();
-    const now = new Date().toISOString();
-
     const fromAcc = bankAccounts.find((a) => a.id === fromId);
     const toAcc = bankAccounts.find((a) => a.id === toId);
 
-    const fromName = fromAcc ? fromAcc.name : 'Conta Origem';
-    const toName = toAcc ? toAcc.name : 'Conta Destino';
+    if (!fromAcc) {
+      throw new Error('Conta bancária de origem não encontrada.');
+    }
+    if (!toAcc) {
+      throw new Error('Conta bancária de destino não encontrada.');
+    }
+
+    // Validate available balance to prevent negative balance
+    const fromBalanceDetails = computeBankAccountBalance(fromAcc, bankTransactions);
+    if (fromBalanceDetails.currentBalance < amount) {
+      throw new Error(
+        `Saldo insuficiente na conta "${fromAcc.name}". Saldo disponível: ${formatCurrency(
+          fromBalanceDetails.currentBalance
+        )}, valor solicitado: ${formatCurrency(amount)}.`
+      );
+    }
+
+    const transferId = 'trf_' + Date.now();
+    const now = new Date().toISOString();
+    const responsible = currentUser?.displayName || currentUser?.username || 'Responsável';
+
+    const fromName = fromAcc.name;
+    const toName = toAcc.name;
 
     try {
-      // 1. Debit from source account
-      const debitTransId = 'bt_trf_out_' + Date.now();
+      const debitTransId = 'bt_trf_out_' + Date.now() + '_1';
       const debitTrans: BankTransaction = {
         id: debitTransId,
         accountId: fromId,
         date,
-        description: `Transferência enviada para ${toName}: ${description}`,
+        description: `Transferência para ${toName}: ${description.trim() || 'Transferência entre contas'}`,
         category: 'Transferência entre contas',
         amount: -Math.abs(amount),
         type: 'transferencia_saida',
@@ -1145,19 +1593,19 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         relatedAccountName: toName,
         relatedTransferId: transferId,
         status: 'active',
-        notes: notes || '',
+        documentNumber: documentNumber?.trim() || '',
+        responsibleName: responsible,
+        notes: notes?.trim() || '',
         createdBy: currentUser?.id || '',
         createdAt: now,
       };
-      await setDoc(doc(db, 'bank_transactions', debitTransId), debitTrans);
 
-      // 2. Credit to destination account
-      const creditTransId = 'bt_trf_in_' + Date.now();
+      const creditTransId = 'bt_trf_in_' + Date.now() + '_2';
       const creditTrans: BankTransaction = {
         id: creditTransId,
         accountId: toId,
         date,
-        description: `Transferência recebida de ${fromName}: ${description}`,
+        description: `Transferência de ${fromName}: ${description.trim() || 'Transferência entre contas'}`,
         category: 'Transferência entre contas',
         amount: Math.abs(amount),
         type: 'transferencia_entrada',
@@ -1165,11 +1613,18 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         relatedAccountName: fromName,
         relatedTransferId: transferId,
         status: 'active',
-        notes: notes || '',
+        documentNumber: documentNumber?.trim() || '',
+        responsibleName: responsible,
+        notes: notes?.trim() || '',
         createdBy: currentUser?.id || '',
         createdAt: now,
       };
-      await setDoc(doc(db, 'bank_transactions', creditTransId), creditTrans);
+
+      // Atomic commit: both debit and credit succeed or neither does
+      const batch = writeBatch(db);
+      batch.set(doc(db, 'bank_transactions', debitTransId), sanitizeForFirestore(debitTrans));
+      batch.set(doc(db, 'bank_transactions', creditTransId), sanitizeForFirestore(creditTrans));
+      await batch.commit();
 
       // Update both balances
       await syncAccountBalance(fromId);
@@ -1179,7 +1634,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         'create',
         'bank_transaction',
         transferId,
-        `Transferência de R$ ${amount.toFixed(2)} efetuada de "${fromName}" para "${toName}". (Não classificada como receita ou despesa)`
+        `Transferência atômica de R$ ${amount.toFixed(2)} efetuada de "${fromName}" para "${toName}". Identificador: ${transferId}`
       );
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `bank_transactions/${transferId}`);
@@ -1252,7 +1707,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     };
 
     try {
-      await setDoc(doc(db, 'calendar_notes', id), newNote);
+      await setDoc(doc(db, 'calendar_notes', id), sanitizeForFirestore(newNote));
       await logAudit('create', 'calendar_note', id, `Anotação no calendário adicionada: "${data.title}" para ${data.date}`);
       return id;
     } catch (error) {
@@ -1355,6 +1810,9 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         expenses,
         vales,
         boletos,
+        categories,
+        expenseCategories,
+        valeCategories,
         bankAccounts: computedBankAccounts,
         bankTransactions,
         receivables,
@@ -1374,12 +1832,18 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         createVale,
         settleVale,
         cancelVale,
+        createCategory,
+        updateCategory,
+        deleteCategory,
         createBoleto,
         payBoleto,
         cancelBoleto,
         deleteBoleto,
         createBankAccount,
         updateBankAccount,
+        deleteBankAccount,
+        deactivateBankAccount,
+        reactivateBankAccount,
         createBankTransaction,
         cancelBankTransaction,
         deleteBankTransaction,

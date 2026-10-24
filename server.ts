@@ -3,7 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
-import { initializeApp } from 'firebase/app';
+import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
   getFirestore,
   collection,
@@ -30,7 +30,7 @@ if (fs.existsSync(configPath)) {
 }
 
 // Initialize Firebase for server persistence
-const fbApp = initializeApp(firebaseConfig);
+const fbApp = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 const db = getFirestore(fbApp, firebaseConfig.firestoreDatabaseId);
 
 // Local backup file for offline / cold-start fallback

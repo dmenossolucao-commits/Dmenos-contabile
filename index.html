@@ -5,28 +5,67 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <script>
       // Suppress Vite HMR WebSocket connection errors in sandbox iframe environment
-      window.addEventListener('error', function (event) {
-        if (
-          event.message &&
-          (event.message.indexOf('WebSocket') !== -1 ||
-            event.message.indexOf('ws://') !== -1 ||
-            event.message.indexOf('wss://') !== -1)
-        ) {
-          event.stopImmediatePropagation();
-          event.preventDefault();
+      (function () {
+        var OriginalWebSocket = window.WebSocket;
+        if (OriginalWebSocket) {
+          window.WebSocket = function (url, protocols) {
+            if (
+              typeof url === 'string' &&
+              (url.indexOf('vite') !== -1 ||
+                url.indexOf(window.location.host) !== -1 ||
+                url.startsWith('ws:') ||
+                url.startsWith('wss:'))
+            ) {
+              return {
+                url: url,
+                readyState: 1, // OPEN
+                bufferedAmount: 0,
+                extensions: '',
+                protocol: '',
+                binaryType: 'blob',
+                send: function () {},
+                close: function () {},
+                addEventListener: function () {},
+                removeEventListener: function () {},
+                dispatchEvent: function () { return true; },
+                onopen: null,
+                onclose: null,
+                onmessage: null,
+                onerror: null
+              };
+            }
+            return new OriginalWebSocket(url, protocols);
+          };
+          window.WebSocket.prototype = OriginalWebSocket.prototype;
+          window.WebSocket.CONNECTING = 0;
+          window.WebSocket.OPEN = 1;
+          window.WebSocket.CLOSING = 2;
+          window.WebSocket.CLOSED = 3;
         }
-      }, true);
-      window.addEventListener('unhandledrejection', function (event) {
-        var msg = (event.reason && (event.reason.message || event.reason)) || '';
-        if (
-          msg.indexOf('WebSocket') !== -1 ||
-          msg.indexOf('ws://') !== -1 ||
-          msg.indexOf('wss://') !== -1
-        ) {
-          event.stopImmediatePropagation();
-          event.preventDefault();
-        }
-      }, true);
+
+        window.addEventListener('error', function (event) {
+          if (
+            event.message &&
+            (event.message.indexOf('WebSocket') !== -1 ||
+              event.message.indexOf('ws://') !== -1 ||
+              event.message.indexOf('wss://') !== -1)
+          ) {
+            event.stopImmediatePropagation();
+            event.preventDefault();
+          }
+        }, true);
+        window.addEventListener('unhandledrejection', function (event) {
+          var msg = (event.reason && (event.reason.message || event.reason)) || '';
+          if (
+            msg.indexOf('WebSocket') !== -1 ||
+            msg.indexOf('ws://') !== -1 ||
+            msg.indexOf('wss://') !== -1
+          ) {
+            event.stopImmediatePropagation();
+            event.preventDefault();
+          }
+        }, true);
+      })();
     </script>
     <title>Dmenos Contro — Sistema de Controle Financeiro</title>
     <meta name="description" content="Sistema profissional de controle financeiro diário para pequeno mercadinho, com fechamento de caixa, vales, despesas, contas bancárias e relatórios." />
