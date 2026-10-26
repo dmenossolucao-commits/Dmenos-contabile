@@ -55,10 +55,15 @@ export const COLOR_CLASSES: Record<string, { bg: string; text: string; border: s
   slate: { bg: 'bg-slate-100', text: 'text-slate-800', border: 'border-slate-200', dot: 'bg-slate-500', label: 'Cinza Neutro' },
 };
 
-export function getCategoryBadge(categoryName: string, allCategories: FinancialCategory[]) {
-  const cat = allCategories.find((c) => c.name.toLowerCase() === categoryName.toLowerCase());
+export function getCategoryBadge(categoryName?: string, allCategories: FinancialCategory[] = []) {
+  const fallback = COLOR_CLASSES.slate;
+  if (!allCategories || !Array.isArray(allCategories) || !categoryName) {
+    return fallback;
+  }
+  const target = String(categoryName).trim().toLowerCase();
+  const cat = allCategories.find((c) => (c?.name || '').trim().toLowerCase() === target);
   const colorKey = cat?.color && COLOR_CLASSES[cat.color] ? cat.color : 'slate';
-  return COLOR_CLASSES[colorKey];
+  return COLOR_CLASSES[colorKey] || fallback;
 }
 
 // Helper to compute due date status & urgency for Boletos
@@ -242,6 +247,15 @@ export const ExpensesValesView: React.FC<ExpensesValesViewProps> = ({
   const [valeMoneySource, setValeMoneySource] = useState<MoneySource>('caixa');
   const [valeBankAccountId, setValeBankAccountId] = useState(bankAccounts[0]?.id || '');
   const [valeNotes, setValeNotes] = useState('');
+
+  // Keep bank accounts synced for expense & vale
+  useEffect(() => {
+    const activeAcc = bankAccounts.find((a) => a.status === 'active') || bankAccounts[0];
+    if (activeAcc) {
+      if (!expBankAccountId) setExpBankAccountId(activeAcc.id);
+      if (!valeBankAccountId) setValeBankAccountId(activeAcc.id);
+    }
+  }, [bankAccounts, expBankAccountId, valeBankAccountId]);
 
   // Keep vale category synced if empty
   useEffect(() => {
@@ -473,14 +487,26 @@ export const ExpensesValesView: React.FC<ExpensesValesViewProps> = ({
       setExpenseErrorMsg('Informe uma descrição clara para a despesa.');
       return;
     }
-    if (expMoneySource === 'banco' && !expBankAccountId) {
-      setExpenseErrorMsg('Selecione a conta bancária de saída.');
-      return;
+
+    let targetBankAccountId = expBankAccountId;
+    let targetBankAccountName = '';
+    if (expMoneySource === 'banco') {
+      if (!targetBankAccountId && bankAccounts.length > 0) {
+        const activeAcc = bankAccounts.find((a) => a.status === 'active') || bankAccounts[0];
+        targetBankAccountId = activeAcc?.id || '';
+      }
+      if (!targetBankAccountId) {
+        setExpenseErrorMsg('Cadastre ou ative uma conta bancária antes de registrar despesas debitadas em banco.');
+        return;
+      }
+      const selectedAcc = bankAccounts.find((a) => a.id === targetBankAccountId);
+      targetBankAccountName = selectedAcc
+        ? (selectedAcc.bankName ? `${selectedAcc.bankName} (${selectedAcc.name})` : selectedAcc.name)
+        : '';
     }
 
     setIsSubmitting(true);
     try {
-      const selectedAcc = bankAccounts.find((a) => a.id === expBankAccountId);
       await createExpense({
         date: expDate,
         type: 'despesa',
@@ -490,8 +516,8 @@ export const ExpensesValesView: React.FC<ExpensesValesViewProps> = ({
         entityName: expEntityName.trim() || '',
         paymentMethod: expPaymentMethod,
         moneySource: expMoneySource,
-        bankAccountId: expMoneySource === 'banco' ? expBankAccountId : '',
-        bankAccountName: expMoneySource === 'banco' && selectedAcc ? selectedAcc.name : '',
+        bankAccountId: expMoneySource === 'banco' ? targetBankAccountId : '',
+        bankAccountName: expMoneySource === 'banco' ? targetBankAccountName : '',
         notes: expNotes.trim() || '',
         status: 'active',
       });
@@ -526,22 +552,34 @@ export const ExpensesValesView: React.FC<ExpensesValesViewProps> = ({
       setValeErrorMsg('Informe o nome do funcionário beneficiário.');
       return;
     }
-    if (valeMoneySource === 'banco' && !valeBankAccountId) {
-      setValeErrorMsg('Selecione a conta bancária de saída.');
-      return;
+
+    let targetBankAccountId = valeBankAccountId;
+    let targetBankAccountName = '';
+    if (valeMoneySource === 'banco') {
+      if (!targetBankAccountId && bankAccounts.length > 0) {
+        const activeAcc = bankAccounts.find((a) => a.status === 'active') || bankAccounts[0];
+        targetBankAccountId = activeAcc?.id || '';
+      }
+      if (!targetBankAccountId) {
+        setValeErrorMsg('Cadastre ou ative uma conta bancária antes de registrar vales debitados em banco.');
+        return;
+      }
+      const selectedAcc = bankAccounts.find((a) => a.id === targetBankAccountId);
+      targetBankAccountName = selectedAcc
+        ? (selectedAcc.bankName ? `${selectedAcc.bankName} (${selectedAcc.name})` : selectedAcc.name)
+        : '';
     }
 
     setIsSubmitting(true);
     try {
-      const selectedAcc = bankAccounts.find((a) => a.id === valeBankAccountId);
       await createVale({
         employeeName: valeEmployeeName.trim(),
         amount,
         date: valeDate,
         category: valeCategory,
         moneySource: valeMoneySource,
-        bankAccountId: valeMoneySource === 'banco' ? valeBankAccountId : '',
-        bankAccountName: valeMoneySource === 'banco' && selectedAcc ? selectedAcc.name : '',
+        bankAccountId: valeMoneySource === 'banco' ? targetBankAccountId : '',
+        bankAccountName: valeMoneySource === 'banco' ? targetBankAccountName : '',
         status: 'pendente',
         notes: valeNotes.trim() || '',
       });
@@ -1167,7 +1205,111 @@ export const ExpensesValesView: React.FC<ExpensesValesViewProps> = ({
             </div>
           </div>
 
-          <div className="overflow-x-auto">
+          {/* MOBILE CARDS VIEW (block md:hidden) */}
+          <div className="block md:hidden divide-y divide-slate-100">
+            {filteredExpenses.length > 0 ? (
+              filteredExpenses.map((exp) => {
+                const isCancelled = exp.status === 'cancelled';
+                const badge = getCategoryBadge(exp.category, categories);
+                return (
+                  <div
+                    key={exp.id}
+                    className={`p-4 space-y-2.5 transition ${
+                      isCancelled ? 'opacity-60 bg-slate-50 line-through' : 'hover:bg-slate-50/50'
+                    }`}
+                  >
+                    {/* Top row: Date, Description, Amount */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <span className="text-[11px] font-semibold text-slate-400 block">
+                          {formatDateBR(exp.date)}
+                        </span>
+                        <h3 className="text-sm font-bold text-slate-900 leading-snug break-words">
+                          {exp.description}
+                        </h3>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <span className="text-sm font-black text-rose-600 block">
+                          {formatCurrency(exp.amount)}
+                        </span>
+                        <span
+                          className={`inline-block px-2 py-0.2 rounded-full text-[10px] font-bold ${
+                            isCancelled
+                              ? 'bg-rose-50 text-rose-800 border border-rose-200'
+                              : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                          }`}
+                        >
+                          {isCancelled ? 'Cancelado' : 'Confirmado'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Favorecido / Observações */}
+                    {(exp.entityName || exp.notes) && (
+                      <div className="text-xs text-slate-600 flex flex-wrap gap-x-2">
+                        {exp.entityName && (
+                          <span>
+                            <strong>Favorecido:</strong> {exp.entityName}
+                          </span>
+                        )}
+                        {exp.notes && (
+                          <span className="text-slate-400 italic">
+                            ({exp.notes})
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* NOÇÃO EXPLÍCITA DE ONDE SAIU O DINHEIRO */}
+                    <div className="pt-1 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100/70">
+                      <div>
+                        {exp.moneySource === 'banco' ? (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-indigo-50 text-indigo-900 border border-indigo-200">
+                            <Landmark className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                            <span>Retirado da Conta: {exp.bankAccountName || 'Conta Bancária'}</span>
+                          </span>
+                        ) : exp.moneySource === 'caixa' ? (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-50 text-emerald-900 border border-emerald-200">
+                            <DollarSign className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                            <span>Retirado do Caixa Físico (Gaveta)</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200">
+                            <span>Retirado de: Outra Origem</span>
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <span className={`px-2 py-0.5 rounded-md text-[11px] font-medium border ${badge.bg} ${badge.text} ${badge.border}`}>
+                          {exp.category}
+                        </span>
+                        {!isCancelled && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCancellingExpense(exp);
+                              setCancellationReason('');
+                            }}
+                            className="px-2.5 py-1 rounded-lg text-[11px] font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 transition cursor-pointer border border-rose-200"
+                          >
+                            Estornar
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="py-8 text-center text-slate-400 text-xs">
+                Nenhuma despesa localizada com os filtros aplicados.
+              </div>
+            )}
+          </div>
+
+          {/* DESKTOP TABLE VIEW (hidden md:block) */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200/80">
                 <tr>
@@ -1175,7 +1317,7 @@ export const ExpensesValesView: React.FC<ExpensesValesViewProps> = ({
                   <th className="py-3 px-4">Descrição</th>
                   <th className="py-3 px-4">Fornecedor / Favorecido</th>
                   <th className="py-3 px-4">Categoria</th>
-                  <th className="py-3 px-4">Forma / Origem</th>
+                  <th className="py-3 px-4">Origem dos Recursos (Retirado de)</th>
                   <th className="py-3 px-4 text-right">Valor</th>
                   <th className="py-3 px-4 text-center">Status</th>
                   <th className="py-3 px-4 text-center">Ações</th>
@@ -1211,15 +1353,37 @@ export const ExpensesValesView: React.FC<ExpensesValesViewProps> = ({
                             {exp.category}
                           </span>
                         </td>
-                        <td className="py-3 px-4 text-slate-500 whitespace-nowrap">
-                          <span className="capitalize">{exp.paymentMethod}</span>
-                          <span className="block text-[10px] text-slate-400">
-                            {exp.moneySource === 'caixa'
-                              ? 'Caixa Físico'
-                              : exp.bankAccountName
-                              ? `Conta: ${exp.bankAccountName}`
-                              : 'Banco'}
-                          </span>
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          {exp.moneySource === 'banco' ? (
+                            <div className="flex flex-col gap-0.5">
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-indigo-50 text-indigo-900 border border-indigo-200">
+                                <Landmark className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                                <span>Retirado da Conta: {exp.bankAccountName || 'Conta Bancária'}</span>
+                              </span>
+                              <span className="text-[10px] text-slate-400 capitalize pl-1">
+                                Forma: {exp.paymentMethod}
+                              </span>
+                            </div>
+                          ) : exp.moneySource === 'caixa' ? (
+                            <div className="flex flex-col gap-0.5">
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-50 text-emerald-900 border border-emerald-200">
+                                <DollarSign className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                <span>Retirado do Caixa Físico (Gaveta)</span>
+                              </span>
+                              <span className="text-[10px] text-slate-400 capitalize pl-1">
+                                Forma: {exp.paymentMethod}
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="flex flex-col gap-0.5">
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200">
+                                <span>Retirado de: Outra Origem</span>
+                              </span>
+                              <span className="text-[10px] text-slate-400 capitalize pl-1">
+                                Forma: {exp.paymentMethod}
+                              </span>
+                            </div>
+                          )}
                         </td>
                         <td className="py-3 px-4 text-right font-bold text-rose-600 whitespace-nowrap">
                           {formatCurrency(exp.amount)}
@@ -1279,7 +1443,140 @@ export const ExpensesValesView: React.FC<ExpensesValesViewProps> = ({
             </div>
           </div>
 
-          <div className="overflow-x-auto">
+          {/* MOBILE CARDS VIEW (block md:hidden) */}
+          <div className="block md:hidden divide-y divide-slate-100">
+            {filteredVales.length > 0 ? (
+              filteredVales.map((vale) => {
+                const isPending = vale.status === 'pendente';
+                const isSettled = vale.status === 'quitado';
+                const isCancelled = vale.status === 'cancelado';
+                const badge = getCategoryBadge(vale.category, categories);
+
+                return (
+                  <div
+                    key={vale.id}
+                    className={`p-4 space-y-2.5 transition ${
+                      isCancelled ? 'opacity-60 bg-slate-50 line-through' : 'hover:bg-slate-50/50'
+                    }`}
+                  >
+                    {/* Top row: Date, Employee, Amount */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <span className="text-[11px] font-semibold text-slate-400 block">
+                          {formatDateBR(vale.date)}
+                        </span>
+                        <h3 className="text-sm font-bold text-slate-900 leading-snug break-words">
+                          {vale.employeeName}
+                        </h3>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <span className="text-sm font-black text-slate-900 block">
+                          {formatCurrency(vale.amount)}
+                        </span>
+                        <span
+                          className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                            isPending
+                              ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                              : isSettled
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                              : 'bg-slate-100 text-slate-600'
+                          }`}
+                        >
+                          {isPending ? 'Pendente' : isSettled ? 'Quitado' : 'Cancelado'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Observações ou detalhes da quitação */}
+                    {vale.notes && (
+                      <p className="text-xs text-slate-500 italic">
+                        {vale.notes}
+                      </p>
+                    )}
+
+                    {isSettled && (
+                      <div className="p-2 rounded-lg bg-emerald-50/70 border border-emerald-100 text-[11px] text-emerald-900">
+                        <span className="font-semibold">Quitação:</span> {vale.settledMethod || 'Quitado'}
+                        {vale.settledDate && ` em ${formatDateBR(vale.settledDate)}`}
+                        {vale.settledBy && ` por ${vale.settledBy}`}
+                      </div>
+                    )}
+
+                    {isCancelled && (
+                      <div className="p-2 rounded-lg bg-rose-50 border border-rose-100 text-[11px] text-rose-700">
+                        Cancelado: {vale.cancellationReason || '—'}
+                      </div>
+                    )}
+
+                    {/* NOÇÃO EXPLÍCITA DE ONDE SAIU O DINHEIRO */}
+                    <div className="pt-1 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100/70">
+                      <div>
+                        {vale.moneySource === 'banco' ? (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-indigo-50 text-indigo-900 border border-indigo-200">
+                            <Landmark className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                            <span>Retirado da Conta: {vale.bankAccountName || 'Conta Bancária'}</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-50 text-emerald-900 border border-emerald-200">
+                            <DollarSign className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                            <span>Retirado do Caixa Físico (Gaveta)</span>
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {vale.category ? (
+                          <span className={`px-2 py-0.5 rounded-md text-[11px] font-medium border ${badge.bg} ${badge.text} ${badge.border}`}>
+                            {vale.category}
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200 text-[11px]">
+                            Adiantamento
+                          </span>
+                        )}
+
+                        {isPending && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSettlingVale(vale);
+                              setSettleMethod('Desconto no Pagamento/Folha');
+                              setSettleNotes('');
+                            }}
+                            className="px-2.5 py-1 rounded-lg bg-emerald-800 hover:bg-emerald-900 text-white font-bold text-[11px] transition shadow-xs cursor-pointer flex items-center gap-1"
+                          >
+                            <Check className="w-3 h-3 text-amber-300" />
+                            <span>Quitar</span>
+                          </button>
+                        )}
+
+                        {!isCancelled && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCancellingVale(vale);
+                              setCancellationReason('');
+                            }}
+                            className="p-1 rounded-lg hover:bg-rose-100 text-rose-600 hover:text-rose-900 transition cursor-pointer"
+                            title="Cancelar vale"
+                          >
+                            <Ban className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="py-8 text-center text-slate-400 text-xs">
+                Nenhum vale localizado com os filtros aplicados.
+              </div>
+            )}
+          </div>
+
+          {/* DESKTOP TABLE VIEW (hidden md:block) */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200/80">
                 <tr>
@@ -1287,7 +1584,7 @@ export const ExpensesValesView: React.FC<ExpensesValesViewProps> = ({
                   <th className="py-3 px-4">Funcionário</th>
                   <th className="py-3 px-4">Categoria</th>
                   <th className="py-3 px-4 text-right">Valor do Vale</th>
-                  <th className="py-3 px-4">Origem do Dinheiro</th>
+                  <th className="py-3 px-4">Origem dos Recursos (Retirado de)</th>
                   <th className="py-3 px-4 text-center">Situação</th>
                   <th className="py-3 px-4">Detalhes da Quitação</th>
                   <th className="py-3 px-4 text-center">Ações</th>
@@ -1332,12 +1629,18 @@ export const ExpensesValesView: React.FC<ExpensesValesViewProps> = ({
                         <td className="py-3 px-4 text-right font-black text-slate-900 whitespace-nowrap">
                           {formatCurrency(vale.amount)}
                         </td>
-                        <td className="py-3 px-4 text-slate-500 whitespace-nowrap">
-                          {vale.moneySource === 'caixa'
-                            ? 'Caixa Físico'
-                            : vale.bankAccountName
-                            ? `Conta: ${vale.bankAccountName}`
-                            : 'Conta Bancária'}
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          {vale.moneySource === 'banco' ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-indigo-50 text-indigo-900 border border-indigo-200">
+                              <Landmark className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                              <span>Retirado da Conta: {vale.bankAccountName || 'Conta Bancária'}</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-50 text-emerald-900 border border-emerald-200">
+                              <DollarSign className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                              <span>Retirado do Caixa Físico (Gaveta)</span>
+                            </span>
+                          )}
                         </td>
                         <td className="py-3 px-4 text-center whitespace-nowrap">
                           <span
@@ -1681,6 +1984,7 @@ export const ExpensesValesView: React.FC<ExpensesValesViewProps> = ({
                     <DollarSign className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
                     <input
                       type="text"
+                      inputMode="decimal"
                       required
                       value={bolAmountStr}
                       onChange={(e) => setBolAmountStr(e.target.value)}
@@ -1788,6 +2092,7 @@ export const ExpensesValesView: React.FC<ExpensesValesViewProps> = ({
                   <Barcode className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
                   <input
                     type="text"
+                    inputMode="numeric"
                     value={bolBarcode}
                     onChange={(e) => setBolBarcode(e.target.value)}
                     placeholder="Cole aqui o código de barras ou linha digitável (47 ou 48 dígitos)"
@@ -1968,6 +2273,7 @@ export const ExpensesValesView: React.FC<ExpensesValesViewProps> = ({
                   </label>
                   <input
                     type="text"
+                    inputMode="decimal"
                     required
                     value={payAmountStr}
                     onChange={(e) => setPayAmountStr(e.target.value)}
@@ -2110,215 +2416,335 @@ export const ExpensesValesView: React.FC<ExpensesValesViewProps> = ({
 
       {/* MODAL: NOVA DESPESA */}
       {isExpenseModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 overflow-y-auto">
-          <div className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-slate-200 p-6 space-y-4 my-8 animate-in fade-in zoom-in-95">
-            <div className="flex justify-between items-center pb-3 border-b border-slate-100">
-              <div className="flex items-center gap-2">
-                <div className="p-2 rounded-xl bg-rose-50 text-rose-700">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-3 sm:p-4 overflow-y-auto animate-in fade-in">
+          <div className="w-full max-w-lg max-h-[92dvh] sm:max-h-[90vh] bg-white rounded-2xl sm:rounded-3xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden">
+            {/* Modal Header */}
+            <div className="flex justify-between items-center p-4 sm:p-5 border-b border-slate-100 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2.5 rounded-xl bg-rose-50 text-rose-700">
                   <TrendingDown className="w-5 h-5" />
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-slate-900">Registrar Nova Despesa</h3>
                   <span className="text-xs text-slate-500">
-                    Lançamento de contas pagas e compras de mercadorias
+                    Lançamento de despesas, contas pagas e compras
                   </span>
                 </div>
               </div>
               <button
+                type="button"
                 onClick={() => setIsExpenseModalOpen(false)}
-                className="p-2 text-slate-400 hover:text-slate-600 rounded-xl"
+                className="p-2 text-slate-400 hover:text-slate-600 rounded-xl transition cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateExpense} className="space-y-4 text-xs">
-              {expenseErrorMsg && (
-                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2 animate-in fade-in">
-                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
-                  <span>{expenseErrorMsg}</span>
-                </div>
-              )}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Data do Pagamento *
-                  </label>
-                  <div className="relative">
-                    <Calendar className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                    <input
-                      type="date"
-                      required
-                      value={expDate}
-                      onChange={(e) => setExpDate(e.target.value)}
-                      className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-700 focus:outline-none"
-                    />
+            {/* Modal Form */}
+            <form onSubmit={handleCreateExpense} className="flex-1 flex flex-col min-h-0 overflow-hidden text-xs">
+              <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3.5 sm:space-y-4 overscroll-contain">
+                {expenseErrorMsg && (
+                  <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2 animate-in fade-in">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                    <span>{expenseErrorMsg}</span>
                   </div>
-                </div>
+                )}
 
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Valor Pago (R$) *
-                  </label>
-                  <div className="relative">
-                    <DollarSign className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                    <input
-                      type="text"
-                      required
-                      value={expAmountStr}
-                      onChange={(e) => setExpAmountStr(e.target.value)}
-                      placeholder="0,00"
-                      className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-700 focus:outline-none font-bold text-rose-600"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">
-                  Descrição da Despesa *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={expDescription}
-                  onChange={(e) => setExpDescription(e.target.value)}
-                  placeholder="Ex: Compra de carne para reposição, Conta de Luz..."
-                  className="w-full p-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-700 focus:outline-none"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Fornecedor / Favorecido (Opcional)
-                  </label>
-                  <div className="relative">
-                    <Building className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                    <input
-                      type="text"
-                      value={expEntityName}
-                      onChange={(e) => setExpEntityName(e.target.value)}
-                      placeholder="Ex: Frigorífico Central"
-                      className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-700 focus:outline-none"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <label className="block font-semibold text-slate-700">
-                      Categoria *
+                {/* Data e Valor Pago */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Data do Pagamento *
                     </label>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setCategoryModalTab('despesa');
-                        setCategoryError('');
-                        setIsCategoryModalOpen(true);
-                      }}
-                      className="text-[11px] font-bold text-emerald-800 hover:underline flex items-center gap-1 cursor-pointer"
-                    >
-                      <Plus className="w-3 h-3" />
-                      <span>Nova categoria</span>
-                    </button>
+                    <div className="relative">
+                      <Calendar className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                      <input
+                        type="date"
+                        required
+                        value={expDate}
+                        onChange={(e) => setExpDate(e.target.value)}
+                        className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-700 focus:outline-none font-semibold text-slate-900"
+                      />
+                    </div>
                   </div>
-                  <select
-                    value={expCategory}
-                    onChange={(e) => setExpCategory(e.target.value)}
-                    className="w-full p-2 rounded-xl border border-slate-200 bg-white font-medium text-slate-800"
-                  >
-                    {expenseCategories.map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Origem do Dinheiro *
-                  </label>
-                  <select
-                    value={expMoneySource}
-                    onChange={(e) => setExpMoneySource(e.target.value as MoneySource)}
-                    className="w-full p-2 rounded-xl border border-slate-200 bg-white font-medium text-slate-800"
-                  >
-                    <option value="caixa">Caixa Físico (Dinheiro em Espécie)</option>
-                    <option value="banco">Conta Bancária (Debita no Banco)</option>
-                    <option value="outro">Outra Fonte</option>
-                  </select>
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Valor Pago (R$) *
+                    </label>
+                    <div className="relative">
+                      <DollarSign className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        required
+                        value={expAmountStr}
+                        onChange={(e) => setExpAmountStr(e.target.value)}
+                        placeholder="0,00"
+                        className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-700 focus:outline-none font-black text-rose-600 text-sm"
+                      />
+                    </div>
+                  </div>
                 </div>
 
+                {/* Descrição */}
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">
-                    Forma de Pagamento *
+                    Descrição da Despesa *
                   </label>
-                  <select
-                    value={expPaymentMethod}
-                    onChange={(e) => setExpPaymentMethod(e.target.value as PaymentMethod)}
-                    className="w-full p-2 rounded-xl border border-slate-200 bg-white font-medium text-slate-800"
-                  >
-                    <option value="dinheiro">Dinheiro Físico</option>
-                    <option value="pix">Pix</option>
-                    <option value="debito">Cartão de Débito</option>
-                    <option value="credito">Cartão de Crédito</option>
-                    <option value="transferencia">Transferência Bancária</option>
-                    <option value="boleto">Boleto Bancário</option>
-                  </select>
-                </div>
-              </div>
-
-              {expMoneySource === 'banco' && (
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Conta Bancária de Saída *
-                  </label>
-                  <select
+                  <input
+                    type="text"
                     required
-                    value={expBankAccountId}
-                    onChange={(e) => setExpBankAccountId(e.target.value)}
-                    className="w-full p-2 rounded-xl border border-slate-200 bg-white font-medium text-slate-800"
-                  >
-                    {bankAccounts
-                      .filter((a) => a.status === 'active')
-                      .map((a) => (
-                        <option key={a.id} value={a.id}>
-                          {a.name} ({a.bankName}) — Saldo: {formatCurrency(a.currentBalance)}
+                    value={expDescription}
+                    onChange={(e) => setExpDescription(e.target.value)}
+                    placeholder="Ex: Compra de mercadorias para reposição, Conta de Energia, Água..."
+                    className="w-full p-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-700 focus:outline-none"
+                  />
+                </div>
+
+                {/* Fornecedor e Categoria */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Fornecedor / Favorecido (Opcional)
+                    </label>
+                    <div className="relative">
+                      <Building className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                      <input
+                        type="text"
+                        value={expEntityName}
+                        onChange={(e) => setExpEntityName(e.target.value)}
+                        placeholder="Ex: Frigorífico Central, Enel, Sabesp..."
+                        className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-700 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between items-center mb-1">
+                      <label className="block font-semibold text-slate-700">
+                        Categoria *
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCategoryModalTab('despesa');
+                          setCategoryError('');
+                          setIsCategoryModalOpen(true);
+                        }}
+                        className="text-[11px] font-bold text-emerald-800 hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        <Plus className="w-3 h-3" />
+                        <span>Nova categoria</span>
+                      </button>
+                    </div>
+                    <select
+                      value={expCategory}
+                      onChange={(e) => setExpCategory(e.target.value)}
+                      className="w-full p-2 rounded-xl border border-slate-200 bg-white font-medium text-slate-800"
+                    >
+                      {expenseCategories.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
                         </option>
                       ))}
-                  </select>
+                    </select>
+                  </div>
                 </div>
-              )}
 
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">
-                  Observações (Opcional)
-                </label>
-                <textarea
-                  rows={2}
-                  value={expNotes}
-                  onChange={(e) => setExpNotes(e.target.value)}
-                  placeholder="Número de nota fiscal, recibo ou detalhes..."
-                  className="w-full p-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-700 focus:outline-none"
-                />
+                {/* DE ONDE SERÁ RETIRADO O DINHEIRO (DESTAQUE VISUAL E CLAREZA DE CONTA) */}
+                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
+                  <div>
+                    <label className="block font-bold text-slate-800 text-xs mb-1">
+                      De onde será retirado o dinheiro? *
+                    </label>
+                    <span className="text-[11px] text-slate-500 block mb-2.5">
+                      Indique claramente se o valor sairá do caixa físico (dinheiro da gaveta) ou será debitado de uma conta bancária
+                    </span>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      {/* Opção 1: Caixa Físico */}
+                      <button
+                        type="button"
+                        onClick={() => setExpMoneySource('caixa')}
+                        className={`p-3 rounded-xl border text-left font-bold text-xs transition cursor-pointer flex flex-col justify-between ${
+                          expMoneySource === 'caixa'
+                            ? 'bg-emerald-800 text-white border-emerald-900 shadow-sm'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <DollarSign className={`w-4 h-4 ${expMoneySource === 'caixa' ? 'text-amber-300' : 'text-emerald-700'}`} />
+                          <span>Caixa Físico</span>
+                        </div>
+                        <span className={`text-[10px] font-normal ${expMoneySource === 'caixa' ? 'text-emerald-100' : 'text-slate-400'}`}>
+                          Dinheiro da gaveta
+                        </span>
+                      </button>
+
+                      {/* Opção 2: Conta Bancária */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setExpMoneySource('banco');
+                          if (!expBankAccountId && bankAccounts.length > 0) {
+                            const activeAcc = bankAccounts.find((a) => a.status === 'active') || bankAccounts[0];
+                            if (activeAcc) setExpBankAccountId(activeAcc.id);
+                          }
+                        }}
+                        className={`p-3 rounded-xl border text-left font-bold text-xs transition cursor-pointer flex flex-col justify-between ${
+                          expMoneySource === 'banco'
+                            ? 'bg-indigo-900 text-white border-indigo-950 shadow-sm'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <Landmark className={`w-4 h-4 ${expMoneySource === 'banco' ? 'text-amber-300' : 'text-indigo-700'}`} />
+                          <span>Conta Bancária</span>
+                        </div>
+                        <span className={`text-[10px] font-normal ${expMoneySource === 'banco' ? 'text-indigo-200' : 'text-slate-400'}`}>
+                          Debita no banco
+                        </span>
+                      </button>
+
+                      {/* Opção 3: Outra Origem */}
+                      <button
+                        type="button"
+                        onClick={() => setExpMoneySource('outro')}
+                        className={`col-span-2 sm:col-span-1 p-3 rounded-xl border text-left font-bold text-xs transition cursor-pointer flex flex-col justify-between ${
+                          expMoneySource === 'outro'
+                            ? 'bg-slate-800 text-white border-slate-900 shadow-sm'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <CreditCard className={`w-4 h-4 ${expMoneySource === 'outro' ? 'text-amber-300' : 'text-slate-500'}`} />
+                          <span>Outra Origem</span>
+                        </div>
+                        <span className={`text-[10px] font-normal ${expMoneySource === 'outro' ? 'text-slate-300' : 'text-slate-400'}`}>
+                          Recursos externos
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* SELEÇÃO E PRÉVIA DA CONTA BANCÁRIA */}
+                  {expMoneySource === 'banco' && (
+                    <div className="p-3 bg-white rounded-xl border border-indigo-100 space-y-2">
+                      <label className="block font-semibold text-slate-700 text-xs">
+                        De qual conta bancária será retirado o dinheiro? *
+                      </label>
+                      <select
+                        required
+                        value={expBankAccountId}
+                        onChange={(e) => setExpBankAccountId(e.target.value)}
+                        className="w-full p-2.5 rounded-xl border border-indigo-200 bg-white font-semibold text-slate-800 text-xs focus:ring-2 focus:ring-indigo-700 focus:outline-none"
+                      >
+                        {bankAccounts.filter((a) => a.status === 'active').length === 0 ? (
+                          <option value="">Nenhuma conta ativa disponível</option>
+                        ) : (
+                          bankAccounts
+                            .filter((a) => a.status === 'active')
+                            .map((a) => (
+                              <option key={a.id} value={a.id}>
+                                {a.bankName} — {a.name} ({a.accountNumberMasked || 'Conta'}) | Saldo disponível: {formatCurrency(a.currentBalance)}
+                              </option>
+                            ))
+                        )}
+                      </select>
+
+                      {/* Notificação dinâmica de débito bancário */}
+                      {(() => {
+                        const selectedAcc = bankAccounts.find((a) => a.id === expBankAccountId);
+                        if (!selectedAcc) return null;
+                        return (
+                          <div className="p-2.5 bg-indigo-50/80 rounded-lg text-[11px] text-indigo-950 border border-indigo-200 space-y-1">
+                            <div className="flex items-center gap-1.5 font-bold">
+                              <Landmark className="w-4 h-4 text-indigo-700 shrink-0" />
+                              <span>Retirado da Conta: {selectedAcc.bankName} ({selectedAcc.name})</span>
+                            </div>
+                            <div className="text-slate-600 flex justify-between items-center text-[10px]">
+                              <span>Saldo atual da conta: <strong>{formatCurrency(selectedAcc.currentBalance)}</strong></span>
+                              <span className="text-indigo-800 font-semibold">Gera débito no extrato</span>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+
+                  {/* NOTIFICAÇÃO SE CAIXA FÍSICO */}
+                  {expMoneySource === 'caixa' && (
+                    <div className="p-2.5 bg-emerald-50 rounded-lg text-[11px] text-emerald-950 border border-emerald-200 flex items-start gap-2">
+                      <DollarSign className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                      <div>
+                        <strong className="block text-emerald-900">Retirado de: Caixa Físico (Dinheiro da Gaveta)</strong>
+                        <span className="text-slate-600 text-[10px]">
+                          O valor sairá das notas/moedas do caixa e será descontado nas saídas do Fechamento Diário.
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* NOTIFICAÇÃO SE OUTRO */}
+                  {expMoneySource === 'outro' && (
+                    <div className="p-2.5 bg-slate-100 rounded-lg text-[11px] text-slate-800 border border-slate-200 flex items-center gap-2">
+                      <CreditCard className="w-4 h-4 text-slate-500 shrink-0" />
+                      <span>
+                        <strong>Retirado de:</strong> Recursos externos (não altera o saldo da gaveta nem das contas bancárias).
+                      </span>
+                    </div>
+                  )}
+
+                  {/* FORMA DE PAGAMENTO */}
+                  <div className="pt-2 border-t border-slate-200/80">
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Forma de Pagamento Utilizada *
+                    </label>
+                    <select
+                      value={expPaymentMethod}
+                      onChange={(e) => setExpPaymentMethod(e.target.value as PaymentMethod)}
+                      className="w-full p-2.5 rounded-xl border border-slate-200 bg-white font-medium text-slate-800"
+                    >
+                      <option value="dinheiro">Dinheiro Físico</option>
+                      <option value="pix">Pix</option>
+                      <option value="debito">Cartão de Débito</option>
+                      <option value="credito">Cartão de Crédito</option>
+                      <option value="transferencia">Transferência Bancária</option>
+                      <option value="boleto">Boleto Bancário</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Observações */}
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">
+                    Observações (Opcional)
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={expNotes}
+                    onChange={(e) => setExpNotes(e.target.value)}
+                    placeholder="Número de nota fiscal, recibo ou detalhes..."
+                    className="w-full p-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-700 focus:outline-none"
+                  />
+                </div>
               </div>
 
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+              {/* Rodapé Fixo / Acessível no Celular e Desktop */}
+              <div className="p-3.5 sm:px-6 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2 shrink-0">
                 <button
                   type="button"
+                  disabled={isSubmitting}
                   onClick={() => setIsExpenseModalOpen(false)}
-                  className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-semibold"
+                  className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 bg-white hover:bg-slate-100 font-semibold text-xs transition cursor-pointer text-center"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="px-5 py-2.5 rounded-xl bg-emerald-800 hover:bg-emerald-900 text-white font-bold transition shadow-sm disabled:opacity-50"
+                  className="flex-1 sm:flex-initial px-5 py-2.5 rounded-xl bg-emerald-800 hover:bg-emerald-900 text-white font-bold text-xs transition shadow-sm disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
                 >
                   {isSubmitting ? 'Salvando...' : 'Salvar Despesa'}
                 </button>
@@ -2330,175 +2756,260 @@ export const ExpensesValesView: React.FC<ExpensesValesViewProps> = ({
 
       {/* MODAL: NOVO VALE */}
       {isValeModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 overflow-y-auto">
-          <div className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-slate-200 p-6 space-y-4 my-8 animate-in fade-in zoom-in-95">
-            <div className="flex justify-between items-center pb-3 border-b border-slate-100">
-              <div className="flex items-center gap-2">
-                <div className="p-2 rounded-xl bg-amber-100 text-amber-800">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-3 sm:p-4 overflow-y-auto animate-in fade-in">
+          <div className="w-full max-w-lg max-h-[92dvh] sm:max-h-[90vh] bg-white rounded-2xl sm:rounded-3xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden">
+            {/* Modal Header */}
+            <div className="flex justify-between items-center p-4 sm:p-5 border-b border-slate-100 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2.5 rounded-xl bg-amber-100 text-amber-800">
                   <UserCheck className="w-5 h-5" />
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-slate-900">Lançar Novo Vale</h3>
                   <span className="text-xs text-slate-500">
-                    Adiantamento concedido a funcionário (nasce PENDENTE)
+                    Adiantamento concedido a funcionário (registrado como PENDENTE)
                   </span>
                 </div>
               </div>
               <button
+                type="button"
                 onClick={() => setIsValeModalOpen(false)}
-                className="p-2 text-slate-400 hover:text-slate-600 rounded-xl"
+                className="p-2 text-slate-400 hover:text-slate-600 rounded-xl transition cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateVale} className="space-y-4 text-xs">
-              {valeErrorMsg && (
-                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2 animate-in fade-in">
-                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
-                  <span>{valeErrorMsg}</span>
-                </div>
-              )}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Nome do Funcionário *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={valeEmployeeName}
-                    onChange={(e) => setValeEmployeeName(e.target.value)}
-                    placeholder="Ex: João da Silva"
-                    className="w-full p-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-700 focus:outline-none"
-                  />
-                </div>
+            {/* Modal Form */}
+            <form onSubmit={handleCreateVale} className="flex-1 flex flex-col min-h-0 overflow-hidden text-xs">
+              <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3.5 sm:space-y-4 overscroll-contain">
+                {valeErrorMsg && (
+                  <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2 animate-in fade-in">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                    <span>{valeErrorMsg}</span>
+                  </div>
+                )}
 
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Valor do Vale (R$) *
-                  </label>
-                  <div className="relative">
-                    <DollarSign className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                {/* Funcionário e Valor */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Nome do Funcionário *
+                    </label>
                     <input
                       type="text"
                       required
-                      value={valeAmountStr}
-                      onChange={(e) => setValeAmountStr(e.target.value)}
-                      placeholder="0,00"
-                      className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-700 focus:outline-none font-black text-amber-700"
+                      value={valeEmployeeName}
+                      onChange={(e) => setValeEmployeeName(e.target.value)}
+                      placeholder="Ex: João da Silva, Maria..."
+                      className="w-full p-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-700 focus:outline-none"
                     />
                   </div>
-                </div>
-              </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Data do Adiantamento *
-                  </label>
-                  <input
-                    type="date"
-                    required
-                    value={valeDate}
-                    onChange={(e) => setValeDate(e.target.value)}
-                    className="w-full p-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-700 focus:outline-none"
-                  />
-                </div>
-
-                <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <label className="block font-semibold text-slate-700">
-                      Categoria do Vale *
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Valor do Vale (R$) *
                     </label>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setCategoryModalTab('vale');
-                        setCategoryError('');
-                        setIsCategoryModalOpen(true);
-                      }}
-                      className="text-[11px] font-bold text-amber-700 hover:underline flex items-center gap-1 cursor-pointer"
-                    >
-                      <Plus className="w-3 h-3" />
-                      <span>Nova</span>
-                    </button>
+                    <div className="relative">
+                      <DollarSign className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        required
+                        value={valeAmountStr}
+                        onChange={(e) => setValeAmountStr(e.target.value)}
+                        placeholder="0,00"
+                        className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-700 focus:outline-none font-black text-amber-700 text-sm"
+                      />
+                    </div>
                   </div>
-                  <select
-                    value={valeCategory}
-                    onChange={(e) => setValeCategory(e.target.value)}
-                    className="w-full p-2 rounded-xl border border-slate-200 bg-white font-medium text-slate-800"
-                  >
-                    {valeCategories.map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
                 </div>
-              </div>
 
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">
-                  Origem do Dinheiro *
-                </label>
-                <select
-                  value={valeMoneySource}
-                  onChange={(e) => setValeMoneySource(e.target.value as MoneySource)}
-                  className="w-full p-2 rounded-xl border border-slate-200 bg-white font-medium text-slate-800"
-                >
-                  <option value="caixa">Caixa Físico</option>
-                  <option value="banco">Conta Bancária (Pix/Transferência)</option>
-                </select>
-              </div>
+                {/* Data e Categoria */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Data do Adiantamento *
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={valeDate}
+                      onChange={(e) => setValeDate(e.target.value)}
+                      className="w-full p-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-700 focus:outline-none"
+                    />
+                  </div>
 
-              {valeMoneySource === 'banco' && (
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Conta Bancária de Saída *
-                  </label>
-                  <select
-                    required
-                    value={valeBankAccountId}
-                    onChange={(e) => setValeBankAccountId(e.target.value)}
-                    className="w-full p-2 rounded-xl border border-slate-200 bg-white font-medium text-slate-800"
-                  >
-                    {bankAccounts
-                      .filter((a) => a.status === 'active')
-                      .map((a) => (
-                        <option key={a.id} value={a.id}>
-                          {a.name} ({a.bankName}) — Saldo: {formatCurrency(a.currentBalance)}
+                  <div>
+                    <div className="flex justify-between items-center mb-1">
+                      <label className="block font-semibold text-slate-700">
+                        Categoria do Vale *
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCategoryModalTab('vale');
+                          setCategoryError('');
+                          setIsCategoryModalOpen(true);
+                        }}
+                        className="text-[11px] font-bold text-amber-700 hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        <Plus className="w-3 h-3" />
+                        <span>Nova</span>
+                      </button>
+                    </div>
+                    <select
+                      value={valeCategory}
+                      onChange={(e) => setValeCategory(e.target.value)}
+                      className="w-full p-2.5 rounded-xl border border-slate-200 bg-white font-medium text-slate-800"
+                    >
+                      {valeCategories.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
                         </option>
                       ))}
-                  </select>
+                    </select>
+                  </div>
                 </div>
-              )}
 
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">
-                  Observações (Opcional)
-                </label>
-                <textarea
-                  rows={2}
-                  value={valeNotes}
-                  onChange={(e) => setValeNotes(e.target.value)}
-                  placeholder="Motivo do adiantamento ou previsão de acerto..."
-                  className="w-full p-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-700 focus:outline-none"
-                />
+                {/* DE ONDE O DINHEIRO DO VALE SERÁ RETIRADO */}
+                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
+                  <div>
+                    <label className="block font-bold text-slate-800 text-xs mb-1">
+                      De onde o dinheiro será retirado? *
+                    </label>
+                    <span className="text-[11px] text-slate-500 block mb-2.5">
+                      Indique se o valor foi entregue em dinheiro da gaveta ou transferido via conta bancária (Pix)
+                    </span>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setValeMoneySource('caixa')}
+                        className={`p-3 rounded-xl border text-left font-bold text-xs transition cursor-pointer flex flex-col justify-between ${
+                          valeMoneySource === 'caixa'
+                            ? 'bg-emerald-800 text-white border-emerald-900 shadow-sm'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <DollarSign className={`w-4 h-4 ${valeMoneySource === 'caixa' ? 'text-amber-300' : 'text-emerald-700'}`} />
+                          <span>Caixa Físico</span>
+                        </div>
+                        <span className={`text-[10px] font-normal ${valeMoneySource === 'caixa' ? 'text-emerald-100' : 'text-slate-400'}`}>
+                          Dinheiro da gaveta
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setValeMoneySource('banco');
+                          if (!valeBankAccountId && bankAccounts.length > 0) {
+                            const activeAcc = bankAccounts.find((a) => a.status === 'active') || bankAccounts[0];
+                            if (activeAcc) setValeBankAccountId(activeAcc.id);
+                          }
+                        }}
+                        className={`p-3 rounded-xl border text-left font-bold text-xs transition cursor-pointer flex flex-col justify-between ${
+                          valeMoneySource === 'banco'
+                            ? 'bg-indigo-900 text-white border-indigo-950 shadow-sm'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <Landmark className={`w-4 h-4 ${valeMoneySource === 'banco' ? 'text-amber-300' : 'text-indigo-700'}`} />
+                          <span>Conta Bancária</span>
+                        </div>
+                        <span className={`text-[10px] font-normal ${valeMoneySource === 'banco' ? 'text-indigo-200' : 'text-slate-400'}`}>
+                          Pix ou transferência
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* SE BANCO */}
+                  {valeMoneySource === 'banco' && (
+                    <div className="p-3 bg-white rounded-xl border border-indigo-100 space-y-2">
+                      <label className="block font-semibold text-slate-700 text-xs">
+                        Qual conta bancária será debitada? *
+                      </label>
+                      <select
+                        required
+                        value={valeBankAccountId}
+                        onChange={(e) => setValeBankAccountId(e.target.value)}
+                        className="w-full p-2.5 rounded-xl border border-indigo-200 bg-white font-semibold text-slate-800 text-xs focus:ring-2 focus:ring-indigo-700 focus:outline-none"
+                      >
+                        {bankAccounts
+                          .filter((a) => a.status === 'active')
+                          .map((a) => (
+                            <option key={a.id} value={a.id}>
+                              {a.bankName} — {a.name} ({a.accountNumberMasked || 'Conta'}) | Saldo disponível: {formatCurrency(a.currentBalance)}
+                            </option>
+                          ))}
+                      </select>
+
+                      {(() => {
+                        const selectedAcc = bankAccounts.find((a) => a.id === valeBankAccountId);
+                        if (!selectedAcc) return null;
+                        return (
+                          <div className="p-2.5 bg-indigo-50/80 rounded-lg text-[11px] text-indigo-950 border border-indigo-200 space-y-1">
+                            <div className="flex items-center gap-1.5 font-bold">
+                              <Landmark className="w-4 h-4 text-indigo-700 shrink-0" />
+                              <span>Retirado da Conta: {selectedAcc.bankName} ({selectedAcc.name})</span>
+                            </div>
+                            <div className="text-slate-600 flex justify-between items-center text-[10px]">
+                              <span>Saldo disponível: <strong>{formatCurrency(selectedAcc.currentBalance)}</strong></span>
+                              <span className="text-indigo-800 font-semibold">Gera débito no extrato</span>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+
+                  {/* SE CAIXA FÍSICO */}
+                  {valeMoneySource === 'caixa' && (
+                    <div className="p-2.5 bg-emerald-50 rounded-lg text-[11px] text-emerald-950 border border-emerald-200 flex items-start gap-2">
+                      <DollarSign className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                      <div>
+                        <strong className="block text-emerald-900">Retirado de: Caixa Físico (Dinheiro da Gaveta)</strong>
+                        <span className="text-slate-600 text-[10px]">
+                          O valor sairá das notas do caixa e constará no fechamento de caixa do dia como vale concedido.
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Observações */}
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">
+                    Observações (Opcional)
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={valeNotes}
+                    onChange={(e) => setValeNotes(e.target.value)}
+                    placeholder="Motivo do adiantamento ou previsão de acerto na folha..."
+                    className="w-full p-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-700 focus:outline-none"
+                  />
+                </div>
               </div>
 
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+              {/* Rodapé Fixo */}
+              <div className="p-3.5 sm:px-6 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2 shrink-0">
                 <button
                   type="button"
+                  disabled={isSubmitting}
                   onClick={() => setIsValeModalOpen(false)}
-                  className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-semibold"
+                  className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 bg-white hover:bg-slate-100 font-semibold text-xs transition cursor-pointer text-center"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold transition shadow-sm disabled:opacity-50"
+                  className="flex-1 sm:flex-initial px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs transition shadow-sm disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
                 >
                   {isSubmitting ? 'Salvando...' : 'Lançar Vale Pendente'}
                 </button>

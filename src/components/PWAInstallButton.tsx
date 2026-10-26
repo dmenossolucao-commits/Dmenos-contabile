@@ -12,16 +12,21 @@ export function usePWAInstall() {
   const [isIOS, setIsIOS] = useState(false);
 
   useEffect(() => {
-    // Detect standalone mode (already installed)
-    const isStandalone =
-      window.matchMedia('(display-mode: standalone)').matches ||
-      (window.navigator as unknown as { standalone?: boolean }).standalone === true;
-    setIsInstalled(isStandalone);
+    try {
+      // Detect standalone mode (already installed)
+      const hasMatchMedia = typeof window !== 'undefined' && typeof window.matchMedia === 'function';
+      const isStandalone =
+        (hasMatchMedia && window.matchMedia('(display-mode: standalone)')?.matches) ||
+        (typeof window !== 'undefined' && (window.navigator as unknown as { standalone?: boolean })?.standalone === true);
+      setIsInstalled(Boolean(isStandalone));
 
-    // Detect iOS devices
-    const userAgent = window.navigator.userAgent.toLowerCase();
-    const isIOSDevice = /iphone|ipad|ipod/.test(userAgent);
-    setIsIOS(isIOSDevice);
+      // Detect iOS devices
+      const userAgent = (typeof window !== 'undefined' && window.navigator?.userAgent?.toLowerCase()) || '';
+      const isIOSDevice = /iphone|ipad|ipod/.test(userAgent);
+      setIsIOS(isIOSDevice);
+    } catch (e) {
+      console.warn('PWA detection warning:', e);
+    }
 
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();

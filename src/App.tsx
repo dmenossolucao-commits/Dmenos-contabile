@@ -65,26 +65,27 @@ function MainLayout() {
   // Filter navigation items by role and permissions
   const navItems = useMemo(() => {
     const list = [];
+    const p = permissions || {};
 
-    if (permissions.canViewDashboard) {
+    if (p.canViewDashboard !== false) {
       list.push({ id: 'dashboard', label: 'Painel Principal', icon: LayoutDashboard });
     }
-    if (permissions.canManageClosures) {
+    if (p.canManageClosures) {
       list.push({ id: 'fechamento', label: 'Fechamento Diário', icon: FileSpreadsheet });
     }
-    if (permissions.canManageExpenses || permissions.canManageVales) {
+    if (p.canManageExpenses || p.canManageVales) {
       list.push({ id: 'despesas', label: 'Saídas: Despesas, Vales & Boletos', icon: TrendingDown });
     }
-    if (permissions.canManageBankAccounts) {
+    if (p.canManageBankAccounts) {
       list.push({ id: 'bancos', label: 'Contas Bancárias', icon: Landmark });
     }
-    if (permissions.canViewHistory) {
+    if (p.canViewHistory) {
       list.push({ id: 'historico', label: 'Histórico & Extratos', icon: History });
     }
-    if (permissions.canManageCalendar) {
+    if (p.canManageCalendar) {
       list.push({ id: 'calendario', label: 'Calendário & Lembretes', icon: Calendar });
     }
-    if (permissions.canViewReports) {
+    if (p.canViewReports) {
       list.push({ id: 'relatorios', label: 'Relatórios & PDF', icon: FileText });
     }
     if (isAdmin) {
@@ -319,7 +320,7 @@ function MainLayout() {
 
         {/* Content Body */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto pb-20 md:pb-8">
-          {activeTab === 'dashboard' && permissions.canViewDashboard && (
+          {activeTab === 'dashboard' && permissions?.canViewDashboard !== false && (
             <Dashboard
               onNavigate={(tab) => setActiveTab(tab)}
               onNewClosure={() => {
@@ -341,33 +342,33 @@ function MainLayout() {
             />
           )}
 
-          {activeTab === 'fechamento' && permissions.canManageClosures && (
+          {activeTab === 'fechamento' && permissions?.canManageClosures && (
             <DailyClosureView
               initialOpenModal={openClosureModal}
               onCloseModal={() => setOpenClosureModal(false)}
             />
           )}
 
-          {activeTab === 'despesas' && (permissions.canManageExpenses || permissions.canManageVales) && (
+          {activeTab === 'despesas' && (permissions?.canManageExpenses || permissions?.canManageVales) && (
             <ExpensesValesView
               initialTab={openValeModal ? 'vales' : 'despesas'}
               initialOpenModal={openExpenseModal || openValeModal}
             />
           )}
 
-          {activeTab === 'bancos' && permissions.canManageBankAccounts && (
+          {activeTab === 'bancos' && permissions?.canManageBankAccounts && (
             <BankAccountsView initialOpenModal={openBankTransModal} />
           )}
 
-          {activeTab === 'historico' && permissions.canViewHistory && (
+          {activeTab === 'historico' && permissions?.canViewHistory && (
             <HistoryView />
           )}
 
-          {activeTab === 'calendario' && permissions.canManageCalendar && (
+          {activeTab === 'calendario' && permissions?.canManageCalendar && (
             <CalendarView />
           )}
 
-          {activeTab === 'relatorios' && permissions.canViewReports && (
+          {activeTab === 'relatorios' && permissions?.canViewReports && (
             <ReportsView />
           )}
 
@@ -378,22 +379,33 @@ function MainLayout() {
 
         {/* Mobile Bottom Navigation Bar */}
         <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-emerald-950/95 backdrop-blur-md border-t border-emerald-900/60 px-2 py-1.5 flex items-center justify-around z-40 text-[10px]">
-          {navItems.slice(0, 5).map((item) => {
+          {navItems.slice(0, 4).map((item) => {
             const active = activeTab === item.id;
             const Icon = item.icon;
             return (
               <button
                 key={item.id}
                 onClick={() => setActiveTab(item.id)}
-                className={`flex flex-col items-center gap-0.5 p-1 ${
-                  active ? 'text-amber-300 font-bold' : 'text-emerald-200/70'
+                className={`flex flex-col items-center gap-0.5 p-1 transition cursor-pointer ${
+                  active ? 'text-amber-300 font-bold' : 'text-emerald-200/70 hover:text-white'
                 }`}
               >
                 <Icon className="w-4 h-4" />
-                <span className="truncate max-w-[60px]">{item.label.split(' ')[0]}</span>
+                <span className="truncate max-w-[64px]">{item.label.split(' ')[0]}</span>
               </button>
             );
           })}
+          <button
+            onClick={() => setIsMobileMenuOpen(true)}
+            className={`flex flex-col items-center gap-0.5 p-1 transition cursor-pointer ${
+              navItems.slice(4).some((i) => i.id === activeTab)
+                ? 'text-amber-300 font-bold'
+                : 'text-emerald-200/70 hover:text-white'
+            }`}
+          >
+            <Menu className="w-4 h-4" />
+            <span>Mais</span>
+          </button>
         </nav>
       </div>
     </div>

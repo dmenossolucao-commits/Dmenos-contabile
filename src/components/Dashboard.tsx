@@ -47,7 +47,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onNewVale,
   onNewBankTransaction,
 }) => {
-  const { closures, expenses, vales, boletos = [], bankAccounts, bankTransactions, calendarNotes, categories = [] } = useFinance();
+  const finance = useFinance() || {};
+  const closures = Array.isArray(finance.closures) ? finance.closures : [];
+  const expenses = Array.isArray(finance.expenses) ? finance.expenses : [];
+  const vales = Array.isArray(finance.vales) ? finance.vales : [];
+  const boletos = Array.isArray(finance.boletos) ? finance.boletos : [];
+  const bankAccounts = Array.isArray(finance.bankAccounts) ? finance.bankAccounts : [];
+  const bankTransactions = Array.isArray(finance.bankTransactions) ? finance.bankTransactions : [];
+  const calendarNotes = Array.isArray(finance.calendarNotes) ? finance.calendarNotes : [];
+  const categories = Array.isArray(finance.categories) ? finance.categories : [];
   const { currentUser, isAdmin } = useAuth();
 
   const [period, setPeriod] = useState<PeriodFilter>('month');
@@ -127,53 +135,53 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   // Financial aggregates
   const totalRecebidoPeriodo = useMemo(() => {
-    return periodClosures.reduce((acc, c) => acc + c.totalSales, 0);
+    return periodClosures.reduce((acc, c) => acc + (Number(c?.totalSales) || 0), 0);
   }, [periodClosures]);
 
   const dinheiroFisicoPeriodo = useMemo(() => {
-    return periodClosures.reduce((acc, c) => acc + c.cashIn, 0);
+    return periodClosures.reduce((acc, c) => acc + (Number(c?.cashIn) || 0), 0);
   }, [periodClosures]);
 
   const pixPeriodo = useMemo(() => {
-    return periodClosures.reduce((acc, c) => acc + c.pixIn, 0);
+    return periodClosures.reduce((acc, c) => acc + (Number(c?.pixIn) || 0), 0);
   }, [periodClosures]);
 
   const cartoesPeriodo = useMemo(() => {
-    return periodClosures.reduce((acc, c) => acc + c.creditCardIn + c.debitCardIn, 0);
+    return periodClosures.reduce((acc, c) => acc + (Number(c?.creditCardIn) || 0) + (Number(c?.debitCardIn) || 0), 0);
   }, [periodClosures]);
 
   const outrasEntradasPeriodo = useMemo(() => {
-    return periodClosures.reduce((acc, c) => acc + c.otherIn, 0);
+    return periodClosures.reduce((acc, c) => acc + (Number(c?.otherIn) || 0), 0);
   }, [periodClosures]);
 
   const totalDespesasPeriodo = useMemo(() => {
-    return periodExpenses.reduce((acc, e) => acc + e.amount, 0);
+    return periodExpenses.reduce((acc, e) => acc + (Number(e?.amount) || 0), 0);
   }, [periodExpenses]);
 
   const totalValesPeriodo = useMemo(() => {
-    return periodVales.reduce((acc, v) => acc + v.amount, 0);
+    return periodVales.reduce((acc, v) => acc + (Number(v?.amount) || 0), 0);
   }, [periodVales]);
 
   const valesPendentesTotal = useMemo(() => {
     return vales
-      .filter((v) => v.status === 'pendente')
-      .reduce((acc, v) => acc + v.amount, 0);
+      .filter((v) => v?.status === 'pendente')
+      .reduce((acc, v) => acc + (Number(v?.amount) || 0), 0);
   }, [vales]);
 
   const totalSaldoBancario = useMemo(() => {
-    return bankAccounts.reduce((acc, a) => acc + a.currentBalance, 0);
+    return bankAccounts.reduce((acc, a) => acc + (Number(a?.currentBalance) || 0), 0);
   }, [bankAccounts]);
 
   const entradasBancariasPeriodo = useMemo(() => {
     return periodTransactions
-      .filter((t) => t.amount > 0 && t.type !== 'transferencia_entrada')
-      .reduce((acc, t) => acc + t.amount, 0);
+      .filter((t) => (Number(t?.amount) || 0) > 0 && t?.type !== 'transferencia_entrada')
+      .reduce((acc, t) => acc + (Number(t?.amount) || 0), 0);
   }, [periodTransactions]);
 
   const saidasBancariasPeriodo = useMemo(() => {
     return periodTransactions
-      .filter((t) => t.amount < 0 && t.type !== 'transferencia_saida')
-      .reduce((acc, t) => acc + Math.abs(t.amount), 0);
+      .filter((t) => (Number(t?.amount) || 0) < 0 && t?.type !== 'transferencia_saida')
+      .reduce((acc, t) => acc + Math.abs(Number(t?.amount) || 0), 0);
   }, [periodTransactions]);
 
   // Latest closure
@@ -302,6 +310,41 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </button>
         </div>
       )}
+
+      {/* Top Quick Actions Bar (Immediate access on mobile & desktop) */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+        <button
+          onClick={onNewClosure}
+          className="p-3 rounded-2xl bg-gradient-to-br from-emerald-800 to-emerald-950 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-sm hover:shadow transition active:scale-[0.98] cursor-pointer border border-emerald-700/50"
+        >
+          <PlusCircle className="w-4 h-4 text-amber-300 shrink-0" />
+          <span className="truncate">Fechar Caixa</span>
+        </button>
+
+        <button
+          onClick={onNewExpense}
+          className="p-3 rounded-2xl bg-white hover:bg-slate-50 text-rose-700 font-bold text-xs flex items-center justify-center gap-2 shadow-xs border border-rose-200/80 transition active:scale-[0.98] cursor-pointer"
+        >
+          <TrendingDown className="w-4 h-4 text-rose-600 shrink-0" />
+          <span className="truncate">Nova Despesa</span>
+        </button>
+
+        <button
+          onClick={onNewVale}
+          className="p-3 rounded-2xl bg-white hover:bg-slate-50 text-amber-800 font-bold text-xs flex items-center justify-center gap-2 shadow-xs border border-amber-200/80 transition active:scale-[0.98] cursor-pointer"
+        >
+          <DollarSign className="w-4 h-4 text-amber-600 shrink-0" />
+          <span className="truncate">Lançar Vale</span>
+        </button>
+
+        <button
+          onClick={onNewBankTransaction}
+          className="p-3 rounded-2xl bg-white hover:bg-slate-50 text-blue-800 font-bold text-xs flex items-center justify-center gap-2 shadow-xs border border-blue-200/80 transition active:scale-[0.98] cursor-pointer"
+        >
+          <Landmark className="w-4 h-4 text-blue-600 shrink-0" />
+          <span className="truncate">Mov. Bancária</span>
+        </button>
+      </div>
 
       {/* Main Stats Cards Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

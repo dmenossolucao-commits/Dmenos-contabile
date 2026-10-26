@@ -13,7 +13,12 @@ import {
   KeyRound,
   ArrowLeft,
   RefreshCw,
-  WifiOff
+  WifiOff,
+  Server,
+  Database,
+  ChevronDown,
+  ChevronUp,
+  Activity
 } from 'lucide-react';
 
 interface AuthModalProps {
@@ -27,8 +32,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
     resetAdminPassword,
     needsInitialSetup,
     connectionError,
-    retryConnection
+    retryConnection,
+    authDiagnostic,
+    isVercelOrClientMode
   } = useAuth();
+
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
 
   const [isResetMode, setIsResetMode] = useState(false);
   const [username, setUsername] = useState('');
@@ -164,34 +173,36 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
         </div>
 
         <div className="p-6 sm:p-8">
-          {/* Connection Error Banner */}
+          {/* Connection Warning Banner */}
           {connectionError && (
-            <div className="mb-6 p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 text-xs leading-relaxed space-y-3">
+            <div className="mb-5 p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs leading-relaxed space-y-2.5">
               <div className="flex items-start gap-2.5">
-                <AlertCircle className="w-5 h-5 shrink-0 text-rose-600 mt-0.5" />
+                <AlertCircle className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
                 <div>
-                  <strong className="block font-bold text-rose-950 mb-1">
-                    Falha na Verificação do Administrador
+                  <strong className="block font-bold text-amber-950 mb-0.5">
+                    Aviso de Conexão com o Banco
                   </strong>
                   <span>{connectionError}</span>
                 </div>
               </div>
-              <p className="text-[11px] text-rose-700">
-                O sistema não considerou o banco como vazio para proteger a integridade dos dados existentes.
-              </p>
-              <button
-                type="button"
-                onClick={handleRetry}
-                disabled={retrying}
-                className="w-full py-2.5 px-3 rounded-xl bg-rose-700 hover:bg-rose-800 text-white font-semibold text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-sm"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${retrying ? 'animate-spin' : ''}`} />
-                <span>{retrying ? 'Reconectando...' : 'Tentar Conectar Novamente'}</span>
-              </button>
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={handleRetry}
+                  disabled={retrying}
+                  className="py-1.5 px-3 rounded-lg bg-amber-700 hover:bg-amber-800 text-white font-semibold text-[11px] transition flex items-center justify-center gap-1.5 cursor-pointer shadow-sm disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3 h-3 ${retrying ? 'animate-spin' : ''}`} />
+                  <span>{retrying ? 'Reconectando...' : 'Reconectar'}</span>
+                </button>
+                <span className="text-[10px] text-amber-800">
+                  Você ainda pode preencher seus dados e tentar o acesso.
+                </span>
+              </div>
             </div>
           )}
 
-          {!connectionError && errorMsg && (
+          {errorMsg && (
             <div className="mb-5 flex flex-col gap-1.5 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs leading-relaxed">
               <div className="flex items-start gap-2">
                 <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
@@ -215,15 +226,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
             </div>
           )}
 
-          {!connectionError && successMsg && (
+          {successMsg && (
             <div className="mb-5 flex items-start gap-2.5 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs leading-relaxed">
               <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
               <span>{successMsg}</span>
             </div>
           )}
 
-          {!connectionError && (
-            <>
+          <>
               {needsInitialSetup ? (
                 /* INITIAL ADMIN SETUP FORM */
                 <form onSubmit={handleSetupSubmit} className="space-y-4">
@@ -528,7 +538,66 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
                 </form>
               )}
             </>
-          )}
+
+          {/* Safe Production & Connection Diagnostic Panel */}
+          <div className="mt-5 pt-3 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setShowDiagnostics(!showDiagnostics)}
+              className="w-full flex items-center justify-between text-[11px] text-slate-500 hover:text-slate-700 py-1 cursor-pointer transition"
+            >
+              <span className="flex items-center gap-1.5 font-medium">
+                <Activity className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Diagnóstico do Banco e Ambiente (Produção)</span>
+              </span>
+              {showDiagnostics ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+            </button>
+
+            {showDiagnostics && (
+              <div className="mt-2.5 p-3 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-600 space-y-1.5 animate-in fade-in duration-150">
+                <div className="flex justify-between items-center py-0.5 border-b border-slate-200/60">
+                  <span className="text-slate-500 font-medium">Ambiente:</span>
+                  <span className="font-semibold text-slate-800">
+                    {isVercelOrClientMode ? 'Vercel / SPA Web' : 'AI Studio / Servidor Node'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-0.5 border-b border-slate-200/60">
+                  <span className="text-slate-500 font-medium">Projeto Firebase:</span>
+                  <span className="font-mono text-[10px] text-slate-700">{authDiagnostic.projectId}</span>
+                </div>
+                <div className="flex justify-between items-center py-0.5 border-b border-slate-200/60">
+                  <span className="text-slate-500 font-medium">Banco Firestore:</span>
+                  <span className="font-mono text-[10px] text-slate-700 truncate max-w-[200px]" title={authDiagnostic.databaseId}>
+                    {authDiagnostic.databaseId}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-0.5 border-b border-slate-200/60">
+                  <span className="text-slate-500 font-medium">Status da Conexão:</span>
+                  <span className={`font-semibold flex items-center gap-1 ${authDiagnostic.status === 'connected' ? 'text-emerald-700' : 'text-rose-600'}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${authDiagnostic.status === 'connected' ? 'bg-emerald-600' : 'bg-rose-500'}`} />
+                    {authDiagnostic.status === 'connected' ? 'Conectado' : 'Falha na conexão'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-0.5 border-b border-slate-200/60">
+                  <span className="text-slate-500 font-medium">Administrador Detectado:</span>
+                  <span className="font-semibold text-slate-800">
+                    {authDiagnostic.hasAdmin ? `Sim (${authDiagnostic.adminUsernames.join(', ')})` : 'Não localizado'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-0.5">
+                  <span className="text-slate-500 font-medium">Última Verificação:</span>
+                  <span className="text-slate-600">{authDiagnostic.lastCheckedAt}</span>
+                </div>
+
+                {authDiagnostic.errorMessage && (
+                  <div className="mt-2 p-2 rounded-lg bg-rose-100/70 text-rose-900 text-[10px] leading-tight">
+                    <strong>Diagnóstico:</strong> {authDiagnostic.errorMessage}
+                    {authDiagnostic.suggestion && <div className="mt-0.5 text-rose-800">{authDiagnostic.suggestion}</div>}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

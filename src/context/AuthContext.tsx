@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { UserProfile, UserRole, UserPermissions, getDefaultPermissions } from '../types';
-import { db } from '../firebase';
+import { db, activeFirebaseConfig } from '../firebase';
 import {
   collection,
   doc,
@@ -25,6 +25,21 @@ export interface StoredUserDoc {
   updatedAt: string;
 }
 
+export interface AuthDiagnostic {
+  status: 'checking' | 'connected' | 'error';
+  mode: 'vercel_client' | 'node_server';
+  projectId: string;
+  databaseId: string;
+  userCount: number;
+  hasAdmin: boolean;
+  adminUsernames: string[];
+  lastCheckedAt: string;
+  errorType?: 'PERMISSION_DENIED' | 'NETWORK_OFFLINE' | 'CONFIG_MISMATCH' | 'UNKNOWN';
+  errorTitle?: string;
+  errorMessage?: string;
+  suggestion?: string;
+}
+
 interface AuthContextType {
   currentUser: UserProfile | null;
   role: UserRole;
@@ -34,6 +49,7 @@ interface AuthContextType {
   needsInitialSetup: boolean;
   connectionError: string | null;
   isVercelOrClientMode: boolean;
+  authDiagnostic: AuthDiagnostic;
   login: (username: string, pass: string) => Promise<void>;
   setupInitialAdmin: (username: string, pass: string, name: string) => Promise<void>;
   resetAdminPassword: (newUsername: string, newPass: string) => Promise<void>;
@@ -131,6 +147,62 @@ export function generateSalt(): string {
     .join('');
 }
 
+export function classifyFirebaseError(err: any): {
+  type: 'PERMISSION_DENIED' | 'NETWORK_OFFLINE' | 'CONFIG_MISMATCH' | 'UNKNOWN';
+  title: string;
+  message: string;
+  suggestion: string;
+} {
+  const code = (err?.code || '').toLowerCase();
+  const rawMsg = (err?.message || '').toLowerCase();
+
+  if (
+    code.includes('permission-denied') ||
+    rawMsg.includes('permission') ||
+    rawMsg.includes('insufficient') ||
+    rawMsg.includes('permissão negada')
+  ) {
+    return {
+      type: 'PERMISSION_DENIED',
+      title: 'Permissão Negada no Firestore',
+      message: 'As regras de segurança do Firestore (firestore.rules) rejeitaram a leitura da coleção "app_users".',
+      suggestion: `Verifique se as regras do Firestore foram publicadas para o banco "${activeFirebaseConfig.firestoreDatabaseId}".`,
+    };
+  }
+
+  if (
+    code.includes('unavailable') ||
+    code.includes('deadline-exceeded') ||
+    rawMsg.includes('offline') ||
+    rawMsg.includes('network') ||
+    rawMsg.includes('tempo limite') ||
+    (typeof navigator !== 'undefined' && !navigator.onLine)
+  ) {
+    return {
+      type: 'NETWORK_OFFLINE',
+      title: 'Falha de Conexão com os Servidores',
+      message: 'Não foi possível estabelecer contato com o Firestore. O dispositivo ou a rede pode estar offline.',
+      suggestion: 'Verifique a conexão de internet do seu celular ou computador e tente novamente.',
+    };
+  }
+
+  if (code.includes('not-found') || (rawMsg.includes('database') && rawMsg.includes('not found'))) {
+    return {
+      type: 'CONFIG_MISMATCH',
+      title: 'Banco de Dados Firestore Incorreto',
+      message: `O banco "${activeFirebaseConfig.firestoreDatabaseId}" não foi localizado no projeto "${activeFirebaseConfig.projectId}".`,
+      suggestion: 'Verifique a configuração de variáveis de ambiente no painel da Vercel.',
+    };
+  }
+
+  return {
+    type: 'UNKNOWN',
+    title: 'Erro de Comunicação com o Banco',
+    message: err?.message || 'Falha desconhecida ao comunicar com o Firestore.',
+    suggestion: 'Tente recarregar a página ou reconectar.',
+  };
+}
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [, setToken] = useState<string | null>(() => safeGetStorage(TOKEN_KEY));
@@ -139,42 +211,63 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [isVercelOrClientMode, setIsVercelOrClientMode] = useState(false);
   const [systemUsers, setSystemUsers] = useState<UserProfile[]>([]);
+  const [authDiagnostic, setAuthDiagnostic] = useState<AuthDiagnostic>({
+    status: 'checking',
+    mode: 'vercel_client',
+    projectId: activeFirebaseConfig.projectId,
+    databaseId: activeFirebaseConfig.firestoreDatabaseId,
+    userCount: 0,
+    hasAdmin: false,
+    adminUsernames: [],
+    lastCheckedAt: new Date().toLocaleTimeString('pt-BR'),
+  });
 
   // Check system status & verify existing session
   const checkAuth = useCallback(async () => {
     setLoading(true);
     setConnectionError(null);
 
+    // 1. Detect if local Node server API is responding
+    let isServerActive = false;
     try {
-      // 1. Detect if local Node server API is responding
-      let isServerActive = false;
-      try {
-        const statusRes = await fetch('/api/auth/status');
-        const cType = statusRes.headers.get('content-type') || '';
-        if (statusRes.ok && cType.includes('application/json')) {
-          isServerActive = true;
-        }
-      } catch (err) {
-        isServerActive = false;
+      const statusRes = await fetch('/api/auth/status');
+      const cType = statusRes.headers.get('content-type') || '';
+      if (statusRes.ok && cType.includes('application/json')) {
+        isServerActive = true;
       }
-      setIsVercelOrClientMode(!isServerActive);
+    } catch (err) {
+      isServerActive = false;
+    }
+    const clientMode = !isServerActive;
+    setIsVercelOrClientMode(clientMode);
 
+    try {
       // 2. Query Firestore as the single authoritative source of truth for both AI Studio and Vercel
       let snap;
       try {
         const fetchPromise = getDocs(collection(db, 'app_users'));
         const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Tempo limite de conexão esgotado (10s).')), 10000)
+          setTimeout(() => reject(new Error('Tempo limite de conexão esgotado (8s).')), 8000)
         );
         snap = (await Promise.race([fetchPromise, timeoutPromise])) as any;
       } catch (fsErr: any) {
         console.error('CRITICAL: Firestore error querying app_users:', fsErr);
-        // DO NOT assume database is empty on connection/network/permission error!
-        setConnectionError(
-          'Não foi possível conectar ao banco de dados no momento (' +
-            (fsErr?.message || 'Falha de rede') +
-            '). Verifique sua conexão e tente novamente.'
-        );
+        const classified = classifyFirebaseError(fsErr);
+        setConnectionError(`${classified.title}: ${classified.message}`);
+        setAuthDiagnostic({
+          status: 'error',
+          mode: clientMode ? 'vercel_client' : 'node_server',
+          projectId: activeFirebaseConfig.projectId,
+          databaseId: activeFirebaseConfig.firestoreDatabaseId,
+          userCount: 0,
+          hasAdmin: false,
+          adminUsernames: [],
+          lastCheckedAt: new Date().toLocaleTimeString('pt-BR'),
+          errorType: classified.type,
+          errorTitle: classified.title,
+          errorMessage: classified.message,
+          suggestion: classified.suggestion,
+        });
         setNeedsInitialSetup(false);
         setLoading(false);
         return;
@@ -183,7 +276,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const usersList: StoredUserDoc[] = [];
       snap.forEach((d: any) => usersList.push(d.data() as StoredUserDoc));
 
-      const hasActiveAdmin = usersList.some((u) => u.role === 'admin' && u.status === 'active');
+      const adminDocs = usersList.filter((u) => u.role === 'admin' && u.status === 'active');
+      const hasActiveAdmin = adminDocs.length > 0;
+      const adminNames = Array.from(new Set(adminDocs.map((u) => u.username.toLowerCase())));
+
+      setAuthDiagnostic({
+        status: 'connected',
+        mode: clientMode ? 'vercel_client' : 'node_server',
+        projectId: activeFirebaseConfig.projectId,
+        databaseId: activeFirebaseConfig.firestoreDatabaseId,
+        userCount: usersList.length,
+        hasAdmin: hasActiveAdmin,
+        adminUsernames: adminNames,
+        lastCheckedAt: new Date().toLocaleTimeString('pt-BR'),
+      });
 
       if (!hasActiveAdmin) {
         // Only if Firestore successfully responded AND there is no admin in app_users
@@ -226,7 +332,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setCurrentUser(null);
         }
       } else {
-        // Also check server token if available
+        // Also check server token if available and in server mode
         const savedToken = safeGetStorage(TOKEN_KEY);
         if (savedToken && isServerActive) {
           try {
@@ -246,7 +352,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     } catch (err: any) {
       console.error('Error during auth check:', err);
-      setConnectionError('Erro inesperado ao verificar autenticação: ' + (err?.message || ''));
     } finally {
       setLoading(false);
     }
@@ -376,65 +481,101 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setConnectionError(null);
     const cleanUser = username.trim().toLowerCase();
 
+    if (!cleanUser) {
+      setLoading(false);
+      throw new Error('Informe o nome de usuário.');
+    }
+    if (!pass) {
+      setLoading(false);
+      throw new Error('Informe a sua senha.');
+    }
+
     try {
-      // 1. Query Firestore app_users
-      const snap = await getDocs(collection(db, 'app_users'));
+      // 1. Query Firestore app_users directly with clear diagnostic classification
+      let snap;
+      try {
+        snap = await getDocs(collection(db, 'app_users'));
+      } catch (fsErr: any) {
+        console.error('Firestore query failed during login:', fsErr);
+        const classified = classifyFirebaseError(fsErr);
+        throw new Error(`[${classified.title}]: ${classified.message}`);
+      }
+
       if (snap.empty) {
         setNeedsInitialSetup(true);
-        throw new Error('Nenhum administrador cadastrado. Configure o administrador inicial.');
+        throw new Error('Nenhum administrador cadastrado no banco compartilhado. Configure o administrador inicial.');
       }
 
       const usersList: StoredUserDoc[] = [];
       snap.forEach((d) => usersList.push(d.data() as StoredUserDoc));
 
-      const foundDoc = usersList.find((u) => u.username.toLowerCase() === cleanUser);
+      // Filter all matching user records for this username
+      const matchingDocs = usersList.filter(
+        (u) => (u.username || '').toLowerCase().trim() === cleanUser
+      );
 
-      if (!foundDoc) {
-        throw new Error('Usuário não encontrado. Verifique o nome de usuário digitado.');
+      if (matchingDocs.length === 0) {
+        throw new Error(`Usuário "${username.trim()}" não encontrado. Verifique o nome digitado.`);
       }
 
-      if (foundDoc.status === 'blocked') {
-        throw new Error('Este usuário foi desativado pelo administrador. Acesso bloqueado.');
+      const activeDocs = matchingDocs.filter((u) => u.status !== 'blocked');
+      if (activeDocs.length === 0) {
+        throw new Error(`O usuário "${username.trim()}" está desativado no sistema. Acesso bloqueado.`);
       }
 
-      // 2. Verify password hash using PBKDF2
-      const computedHash = await hashPasswordBrowser(pass, foundDoc.salt);
-      if (computedHash !== foundDoc.hash) {
-        throw new Error('Senha incorreta. Tente novamente.');
+      // 2. Verify password hash using PBKDF2 against all candidate records
+      let matchedDoc: StoredUserDoc | null = null;
+      for (const candidate of activeDocs) {
+        try {
+          const computedHash = await hashPasswordBrowser(pass, candidate.salt);
+          if (computedHash === candidate.hash) {
+            matchedDoc = candidate;
+            break;
+          }
+        } catch (hashErr) {
+          console.warn('Hash verification warning for candidate:', hashErr);
+        }
+      }
+
+      if (!matchedDoc) {
+        throw new Error('Senha incorreta. Verifique a senha digitada ou utilize a redefinição de senha.');
       }
 
       // 3. Successful login
       const profile: UserProfile = {
-        id: foundDoc.id,
-        username: foundDoc.username,
-        displayName: foundDoc.displayName,
-        role: foundDoc.role,
-        status: foundDoc.status,
-        permissions: foundDoc.permissions,
-        createdAt: foundDoc.createdAt,
-        updatedAt: foundDoc.updatedAt,
+        id: matchedDoc.id,
+        username: matchedDoc.username,
+        displayName: matchedDoc.displayName,
+        role: matchedDoc.role,
+        status: matchedDoc.status,
+        permissions: matchedDoc.permissions,
+        createdAt: matchedDoc.createdAt,
+        updatedAt: matchedDoc.updatedAt,
       };
 
       safeSetStorage(SESSION_USER_KEY, JSON.stringify(profile));
       setCurrentUser(profile);
       setNeedsInitialSetup(false);
 
-      // Dev server sync (optional)
-      try {
-        const res = await fetch('/api/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username: cleanUser, password: pass }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.token) {
-            safeSetStorage(TOKEN_KEY, data.token);
-            setToken(data.token);
+      // Dev server sync only when Node server is active (bypassed on static Vercel)
+      if (!isVercelOrClientMode) {
+        try {
+          const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: cleanUser, password: pass }),
+          });
+          const cType = res.headers.get('content-type') || '';
+          if (res.ok && cType.includes('application/json')) {
+            const data = await res.json();
+            if (data.token) {
+              safeSetStorage(TOKEN_KEY, data.token);
+              setToken(data.token);
+            }
           }
+        } catch (e) {
+          // Dev server sync optional
         }
-      } catch (e) {
-        // Server login optional on static Vercel
       }
     } finally {
       setLoading(false);
@@ -457,33 +598,55 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const usersList: StoredUserDoc[] = [];
       snap.forEach((d) => usersList.push(d.data() as StoredUserDoc));
 
-      const existingDoc = usersList.find((u) => u.role === 'admin') || null;
-      const adminId = existingDoc ? existingDoc.id : `usr_admin_${Date.now()}`;
+      const matchingAdmins = usersList.filter(
+        (u) => u.role === 'admin' && (u.username.toLowerCase() === cleanUser || usersList.filter(x => x.role === 'admin').length === 1)
+      );
+
+      const targetId = matchingAdmins.length > 0 ? matchingAdmins[0].id : `usr_admin_${Date.now()}`;
+      const targetDisplayName = matchingAdmins.length > 0 ? matchingAdmins[0].displayName : 'Administrador Principal';
 
       const adminDoc: StoredUserDoc = {
-        id: adminId,
+        id: targetId,
         username: cleanUser,
-        displayName: existingDoc?.displayName || 'Administrador Principal',
+        displayName: targetDisplayName,
         salt,
         hash,
         role: 'admin',
         status: 'active',
         permissions: getDefaultPermissions('admin'),
-        createdAt: existingDoc?.createdAt || now,
+        createdAt: matchingAdmins[0]?.createdAt || now,
         updatedAt: now,
       };
 
-      await setDoc(doc(db, 'app_users', adminId), adminDoc);
+      await setDoc(doc(db, 'app_users', targetId), adminDoc);
       try {
-        await setDoc(doc(db, 'system_users', adminId), adminDoc);
+        await setDoc(doc(db, 'system_users', targetId), adminDoc);
       } catch (e) {
         // secondary
       }
 
+      // Synchronize any duplicate records matching this username so both have the valid salt and hash
+      for (const extra of matchingAdmins) {
+        if (extra.id !== targetId) {
+          try {
+            await setDoc(doc(db, 'app_users', extra.id), {
+              ...extra,
+              username: cleanUser,
+              salt,
+              hash,
+              status: 'active',
+              updatedAt: now,
+            });
+          } catch (e) {
+            console.warn('Sync duplicate admin doc warning:', e);
+          }
+        }
+      }
+
       const profile: UserProfile = {
-        id: adminId,
+        id: targetId,
         username: cleanUser,
-        displayName: adminDoc.displayName,
+        displayName: targetDisplayName,
         role: 'admin',
         status: 'active',
         permissions: getDefaultPermissions('admin'),
@@ -678,6 +841,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         needsInitialSetup,
         connectionError,
         isVercelOrClientMode,
+        authDiagnostic,
         login,
         setupInitialAdmin,
         resetAdminPassword,

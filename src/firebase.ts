@@ -7,13 +7,18 @@ import {
 import defaultConfig from '../firebase-applet-config.json';
 
 // Support VITE_ environment variables with fallback to firebase-applet-config.json
+const rawEnvDbId = typeof import.meta !== 'undefined' ? import.meta.env?.VITE_FIREBASE_DATABASE_ID : undefined;
+const resolvedDatabaseId = (rawEnvDbId && rawEnvDbId !== '(default)' && rawEnvDbId.trim() !== '')
+  ? rawEnvDbId
+  : defaultConfig.firestoreDatabaseId;
+
 const firebaseConfig = {
   ...defaultConfig,
   ...(typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_PROJECT_ID ? { projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID } : {}),
   ...(typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_APP_ID ? { appId: import.meta.env.VITE_FIREBASE_APP_ID } : {}),
   ...(typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_API_KEY ? { apiKey: import.meta.env.VITE_FIREBASE_API_KEY } : {}),
   ...(typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_AUTH_DOMAIN ? { authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN } : {}),
-  ...(typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_DATABASE_ID ? { firestoreDatabaseId: import.meta.env.VITE_FIREBASE_DATABASE_ID } : {}),
+  firestoreDatabaseId: resolvedDatabaseId,
   ...(typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_STORAGE_BUCKET ? { storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET } : {}),
   ...(typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_MESSAGING_SENDER_ID ? { messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID } : {}),
 };
@@ -21,8 +26,16 @@ const firebaseConfig = {
 // Initialize Firebase App safely (prevents duplicate app initialization error)
 export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
-// Initialize Firestore with firestoreDatabaseId (CRITICAL: preserves existing database)
+// Initialize Firestore with firestoreDatabaseId (CRITICAL: preserves existing named database)
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+
+// Safe diagnostic summary (never exposes secrets or keys)
+export const activeFirebaseConfig = {
+  projectId: firebaseConfig.projectId || 'desconhecido',
+  firestoreDatabaseId: firebaseConfig.firestoreDatabaseId || 'desconhecido',
+  appId: firebaseConfig.appId ? `${firebaseConfig.appId.slice(0, 8)}...` : 'configurado',
+  hasApiKey: Boolean(firebaseConfig.apiKey),
+};
 
 export enum OperationType {
   CREATE = 'create',

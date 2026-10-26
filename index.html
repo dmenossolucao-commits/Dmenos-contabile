@@ -4,67 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <script>
-      // Suppress Vite HMR WebSocket connection errors in sandbox iframe environment
+      // Clean up any stale development service workers that could cause blank screens
       (function () {
-        var OriginalWebSocket = window.WebSocket;
-        if (OriginalWebSocket) {
-          window.WebSocket = function (url, protocols) {
-            if (
-              typeof url === 'string' &&
-              (url.indexOf('vite') !== -1 ||
-                url.indexOf(window.location.host) !== -1 ||
-                url.startsWith('ws:') ||
-                url.startsWith('wss:'))
-            ) {
-              return {
-                url: url,
-                readyState: 1, // OPEN
-                bufferedAmount: 0,
-                extensions: '',
-                protocol: '',
-                binaryType: 'blob',
-                send: function () {},
-                close: function () {},
-                addEventListener: function () {},
-                removeEventListener: function () {},
-                dispatchEvent: function () { return true; },
-                onopen: null,
-                onclose: null,
-                onmessage: null,
-                onerror: null
-              };
+        if ('serviceWorker' in navigator && (window.location.hostname === 'localhost' || window.location.hostname.includes('run.app'))) {
+          navigator.serviceWorker.getRegistrations().then(function (registrations) {
+            for (var i = 0; i < registrations.length; i++) {
+              if (registrations[i].scope.indexOf(window.location.origin) !== -1) {
+                registrations[i].unregister();
+              }
             }
-            return new OriginalWebSocket(url, protocols);
-          };
-          window.WebSocket.prototype = OriginalWebSocket.prototype;
-          window.WebSocket.CONNECTING = 0;
-          window.WebSocket.OPEN = 1;
-          window.WebSocket.CLOSING = 2;
-          window.WebSocket.CLOSED = 3;
+          }).catch(function () {});
         }
-
-        window.addEventListener('error', function (event) {
-          if (
-            event.message &&
-            (event.message.indexOf('WebSocket') !== -1 ||
-              event.message.indexOf('ws://') !== -1 ||
-              event.message.indexOf('wss://') !== -1)
-          ) {
-            event.stopImmediatePropagation();
-            event.preventDefault();
-          }
-        }, true);
-        window.addEventListener('unhandledrejection', function (event) {
-          var msg = (event.reason && (event.reason.message || event.reason)) || '';
-          if (
-            msg.indexOf('WebSocket') !== -1 ||
-            msg.indexOf('ws://') !== -1 ||
-            msg.indexOf('wss://') !== -1
-          ) {
-            event.stopImmediatePropagation();
-            event.preventDefault();
-          }
-        }, true);
       })();
     </script>
     <title>Dmenos Contro — Sistema de Controle Financeiro</title>

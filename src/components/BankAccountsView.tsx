@@ -1726,6 +1726,7 @@ export const BankAccountsView: React.FC<BankAccountsViewProps> = ({
                       <label className="block font-medium text-slate-600 mb-1">Saldo Inicial (R$)</label>
                       <input
                         type="text"
+                        inputMode="decimal"
                         value={accInitialBalanceStr}
                         onChange={(e) => setAccInitialBalanceStr(e.target.value)}
                         placeholder="0,00"
@@ -1880,6 +1881,7 @@ export const BankAccountsView: React.FC<BankAccountsViewProps> = ({
                       <label className="block font-medium text-slate-600 mb-1">Saldo Inicial (R$)</label>
                       <input
                         type="text"
+                        inputMode="decimal"
                         value={editAccInitialBalanceStr}
                         onChange={(e) => setEditAccInitialBalanceStr(e.target.value)}
                         className="w-full p-2 rounded-xl border border-slate-200 bg-white font-bold text-slate-800 text-xs"
@@ -2005,7 +2007,11 @@ export const BankAccountsView: React.FC<BankAccountsViewProps> = ({
 
                 {/* Conta Bancária */}
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Conta Bancária *</label>
+                  <label className="block font-semibold text-slate-700 mb-1">
+                    {transDirection === 'saida'
+                      ? 'De qual conta será retirado o dinheiro? (Saída) *'
+                      : 'Para qual conta o dinheiro entrará? (Entrada) *'}
+                  </label>
                   <select
                     value={transAccountId}
                     onChange={(e) => setTransAccountId(e.target.value)}
@@ -2019,6 +2025,29 @@ export const BankAccountsView: React.FC<BankAccountsViewProps> = ({
                         </option>
                       ))}
                   </select>
+
+                  {/* Informação explícita de onde sai ou entra o dinheiro */}
+                  {(() => {
+                    const acc = bankAccounts.find((a) => a.id === transAccountId);
+                    if (!acc) return null;
+                    const bal = computeBankAccountBalance(acc, bankTransactions).currentBalance;
+                    return (
+                      <div
+                        className={`mt-1.5 p-2 rounded-lg text-[11px] font-medium flex items-center gap-1.5 ${
+                          transDirection === 'saida'
+                            ? 'bg-rose-50 text-rose-800 border border-rose-100'
+                            : 'bg-emerald-50 text-emerald-800 border border-emerald-100'
+                        }`}
+                      >
+                        <Landmark className="w-3.5 h-3.5 shrink-0" />
+                        <span>
+                          {transDirection === 'saida' ? 'Retirado da conta:' : 'Destino:'}{' '}
+                          <strong>{acc.name} ({acc.bankName})</strong> — Saldo disponível:{' '}
+                          <strong>{formatCurrency(bal)}</strong>
+                        </span>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Valor e Data - 1 coluna no celular, 2 em telas maiores */}
@@ -2027,6 +2056,7 @@ export const BankAccountsView: React.FC<BankAccountsViewProps> = ({
                     <label className="block font-semibold text-slate-700 mb-1">Valor em Reais (R$) *</label>
                     <input
                       type="text"
+                      inputMode="decimal"
                       required
                       value={transAmountStr}
                       onChange={(e) => setTransAmountStr(e.target.value)}
@@ -2247,6 +2277,7 @@ export const BankAccountsView: React.FC<BankAccountsViewProps> = ({
                     <label className="block font-semibold text-slate-700 mb-1">Valor (R$) *</label>
                     <input
                       type="text"
+                      inputMode="decimal"
                       required
                       value={trfAmountStr}
                       onChange={(e) => setTrfAmountStr(e.target.value)}

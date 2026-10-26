@@ -617,6 +617,7 @@ export const DailyClosureView: React.FC<DailyClosureViewProps> = ({
                       <span className="absolute left-3 top-2.5 text-xs font-bold text-slate-400">R$</span>
                       <input
                         type="text"
+                        inputMode="decimal"
                         value={initialCashStr}
                         onChange={(e) => setInitialCashStr(e.target.value)}
                         placeholder="0,00"
@@ -633,6 +634,7 @@ export const DailyClosureView: React.FC<DailyClosureViewProps> = ({
                       <span className="absolute left-3 top-2.5 text-xs font-bold text-slate-400">R$</span>
                       <input
                         type="text"
+                        inputMode="decimal"
                         value={cashInStr}
                         onChange={(e) => setCashInStr(e.target.value)}
                         placeholder="0,00"
@@ -649,6 +651,7 @@ export const DailyClosureView: React.FC<DailyClosureViewProps> = ({
                       <span className="absolute left-3 top-2.5 text-xs font-bold text-slate-400">R$</span>
                       <input
                         type="text"
+                        inputMode="decimal"
                         value={pixInStr}
                         onChange={(e) => setPixInStr(e.target.value)}
                         placeholder="0,00"
@@ -665,6 +668,7 @@ export const DailyClosureView: React.FC<DailyClosureViewProps> = ({
                       <span className="absolute left-3 top-2.5 text-xs font-bold text-slate-400">R$</span>
                       <input
                         type="text"
+                        inputMode="decimal"
                         value={creditCardInStr}
                         onChange={(e) => setCreditCardInStr(e.target.value)}
                         placeholder="0,00"
@@ -681,6 +685,7 @@ export const DailyClosureView: React.FC<DailyClosureViewProps> = ({
                       <span className="absolute left-3 top-2.5 text-xs font-bold text-slate-400">R$</span>
                       <input
                         type="text"
+                        inputMode="decimal"
                         value={debitCardInStr}
                         onChange={(e) => setDebitCardInStr(e.target.value)}
                         placeholder="0,00"
@@ -697,6 +702,7 @@ export const DailyClosureView: React.FC<DailyClosureViewProps> = ({
                       <span className="absolute left-3 top-2.5 text-xs font-bold text-slate-400">R$</span>
                       <input
                         type="text"
+                        inputMode="decimal"
                         value={otherInStr}
                         onChange={(e) => setOtherInStr(e.target.value)}
                         placeholder="0,00"
@@ -738,6 +744,7 @@ export const DailyClosureView: React.FC<DailyClosureViewProps> = ({
                       <span className="absolute left-3 top-2.5 text-xs font-bold text-slate-400">R$</span>
                       <input
                         type="text"
+                        inputMode="decimal"
                         value={expensesCashStr}
                         onChange={(e) => setExpensesCashStr(e.target.value)}
                         placeholder="0,00"
@@ -754,6 +761,7 @@ export const DailyClosureView: React.FC<DailyClosureViewProps> = ({
                       <span className="absolute left-3 top-2.5 text-xs font-bold text-slate-400">R$</span>
                       <input
                         type="text"
+                        inputMode="decimal"
                         value={valesCashStr}
                         onChange={(e) => setValesCashStr(e.target.value)}
                         placeholder="0,00"
@@ -784,6 +792,7 @@ export const DailyClosureView: React.FC<DailyClosureViewProps> = ({
                   <span className="absolute left-3 top-2.5 text-xs font-black text-amber-700">R$</span>
                   <input
                     type="text"
+                    inputMode="decimal"
                     required
                     value={countedCashStr}
                     onChange={(e) => setCountedCashStr(e.target.value)}

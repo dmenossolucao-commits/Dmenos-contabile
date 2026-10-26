@@ -2,12 +2,27 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    function isValidUserDoc(data) {
+      return data.keys().hasAll(['username', 'displayName', 'salt', 'hash', 'role', 'status', 'permissions']) &&
+        data.username is string && data.username.size() >= 2 &&
+        data.displayName is string &&
+        data.salt is string && data.salt.size() >= 16 &&
+        data.hash is string && data.hash.size() >= 32 &&
+        data.role in ['admin', 'employee'] &&
+        data.status in ['active', 'blocked'] &&
+        data.permissions is map;
+    }
+
     // User and Authentication collections (accessible in both server and Vercel client modes)
     match /app_users/{docId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow create, update: if isValidUserDoc(request.resource.data);
+      allow delete: if resource != null;
     }
     match /system_users/{docId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow create, update: if isValidUserDoc(request.resource.data);
+      allow delete: if resource != null;
     }
     match /user_sessions/{docId} {
       allow read, write: if true;
