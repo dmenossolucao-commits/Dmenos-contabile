@@ -205,6 +205,30 @@
         "updatedAt": { "type": "string" }
       },
       "required": ["name", "type", "createdAt"]
+    },
+    "CashWithdrawal": {
+      "title": "CashWithdrawal",
+      "description": "Saídas de caixa registradas durante o expediente no fechamento de caixa (Dinheiro ou Pix)",
+      "type": "object",
+      "properties": {
+        "closureId": { "type": "string" },
+        "date": { "type": "string" },
+        "time": { "type": "string" },
+        "dateTime": { "type": "string" },
+        "cashierName": { "type": "string" },
+        "reason": { "type": "string" },
+        "amount": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["dinheiro", "pix"] },
+        "responsibleUid": { "type": "string" },
+        "responsibleName": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "cancelled"] },
+        "cancellationReason": { "type": "string" },
+        "cancelledBy": { "type": "string" },
+        "cancelledAt": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["date", "time", "cashierName", "reason", "amount", "paymentMethod", "responsibleName", "status"]
     }
   },
   "firestore": {
@@ -215,6 +239,10 @@
     "/closures/{closureId}": {
       "schema": "Closure",
       "description": "Fechamentos diários de caixa com valores contados, esperados e diferenças"
+    },
+    "/cash_withdrawals/{withdrawalId}": {
+      "schema": "CashWithdrawal",
+      "description": "Saídas e despesas avulsas do fechamento de caixa pagas em dinheiro ou Pix"
     },
     "/expenses/{expenseId}": {
       "schema": "Expense",

@@ -87,7 +87,11 @@ export function generateClosurePDF(closure: DailyClosure) {
     body: [
       ['Saldo Inicial de Dinheiro no Caixa', 'Abertura', formatCurrency(closure.initialCash)],
       ['Entradas em Dinheiro Físico', 'Recebimento', formatCurrency(closure.cashIn)],
+      ['Saídas Pagas em Dinheiro', 'Saída Dinheiro', `(${formatCurrency(closure.expensesCash || 0)})`],
+      ['Saldo Líquido em Dinheiro', 'Líquido Dinheiro', formatCurrency((closure.cashIn || 0) - (closure.expensesCash || 0))],
       ['Recebimentos via Pix', 'Eletrônico', formatCurrency(closure.pixIn)],
+      ['Saídas Pagas via Pix', 'Saída Pix', `(${formatCurrency(closure.expensesPix || 0)})`],
+      ['Saldo Líquido via Pix', 'Líquido Pix', formatCurrency((closure.pixIn || 0) - (closure.expensesPix || 0))],
       ['Recebimentos Cartão de Crédito', 'Operadora', formatCurrency(closure.creditCardIn)],
       ['Recebimentos Cartão de Débito', 'Operadora', formatCurrency(closure.debitCardIn)],
       [
@@ -96,14 +100,26 @@ export function generateClosurePDF(closure: DailyClosure) {
         formatCurrency(closure.otherIn),
       ],
       ['Total Geral de Vendas / Faturamento', 'TOTAL VENDAS', formatCurrency(closure.totalSales)],
-      ['Despesas Pagas do Caixa', 'Saída Dinheiro', `(${formatCurrency(closure.expensesCash)})`],
-      ['Vales Pagos do Caixa', 'Saída Dinheiro', `(${formatCurrency(closure.valesCash)})`],
-      ['Saldo Esperado em Dinheiro', 'Cálculo Oficial', formatCurrency(closure.expectedCash)],
+      ['Vales Pagos do Caixa', 'Saída Dinheiro', `(${formatCurrency(closure.valesCash || 0)})`],
+      [
+        'Total Geral de Saídas (Dinheiro + Pix + Vales)',
+        'TOTAL SAÍDAS',
+        formatCurrency((closure.expensesCash || 0) + (closure.expensesPix || 0) + (closure.valesCash || 0)),
+      ],
+      [
+        'Movimento Líquido Total',
+        'LÍQUIDO GERAL',
+        formatCurrency(
+          closure.totalSales -
+            ((closure.expensesCash || 0) + (closure.expensesPix || 0) + (closure.valesCash || 0))
+        ),
+      ],
+      ['Saldo Esperado em Dinheiro no Caixa', 'Cálculo Oficial', formatCurrency(closure.expectedCash)],
       ['Dinheiro Físico Contado no Caixa', 'Contagem Final', formatCurrency(closure.countedCash)],
       [
-        'Total Saída Física (Despesas + Vales)',
-        'Saída Física',
-        formatCurrency((closure.expensesCash || 0) + (closure.valesCash || 0)),
+        'Diferença de Caixa (Contado - Esperado)',
+        closure.cashDifference >= 0 ? 'Sobra de Caixa' : 'Falta de Caixa',
+        formatCurrency(closure.cashDifference),
       ],
     ],
     theme: 'grid',
@@ -114,14 +130,18 @@ export function generateClosurePDF(closure: DailyClosure) {
       2: { cellWidth: 45, halign: 'right', fontStyle: 'bold' },
     },
     didParseCell: (data) => {
-      // Highlight total vendas and saída física
-      if (data.row.index === 6) {
+      // Highlight total vendas (row 10), total saídas (row 12), líquido geral (row 13)
+      if (data.row.index === 10) {
         data.cell.styles.fillColor = [240, 253, 244]; // emerald light
         data.cell.styles.textColor = [6, 95, 70];
       }
-      if (data.row.index === 11) {
+      if (data.row.index === 12) {
         data.cell.styles.fillColor = [254, 242, 242]; // red light
         data.cell.styles.textColor = [185, 28, 28];
+      }
+      if (data.row.index === 13) {
+        data.cell.styles.fillColor = [238, 242, 255]; // indigo light
+        data.cell.styles.textColor = [55, 48, 163];
       }
     },
   });

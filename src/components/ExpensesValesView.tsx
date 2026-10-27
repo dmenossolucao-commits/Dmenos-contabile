@@ -1926,9 +1926,9 @@ export const ExpensesValesView: React.FC<ExpensesValesViewProps> = ({
 
       {/* MODAL: NOVO BOLETO COM AVISO DE VENCIMENTO */}
       {isBoletoModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 overflow-y-auto">
-          <div className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-slate-200 p-6 space-y-4 my-8 animate-in fade-in zoom-in-95">
-            <div className="flex justify-between items-center pb-3 border-b border-slate-100">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-2 sm:p-4 overflow-y-auto animate-in fade-in">
+          <div className="w-full max-w-lg max-h-[92dvh] sm:max-h-[90vh] bg-white rounded-2xl sm:rounded-3xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden my-auto animate-in fade-in zoom-in-95">
+            <div className="flex justify-between items-center p-4 sm:p-5 border-b border-slate-100 shrink-0">
               <div className="flex items-center gap-2">
                 <div className="p-2 rounded-xl bg-emerald-100 text-emerald-900">
                   <Barcode className="w-5 h-5 text-emerald-800" />
@@ -1944,13 +1944,14 @@ export const ExpensesValesView: React.FC<ExpensesValesViewProps> = ({
               </div>
               <button
                 onClick={() => setIsBoletoModalOpen(false)}
-                className="p-2 text-slate-400 hover:text-slate-600 rounded-xl"
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-xl cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateBoleto} className="space-y-4 text-xs">
+            <form onSubmit={handleCreateBoleto} className="flex-1 flex flex-col min-h-0 overflow-hidden text-xs">
+              <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 overscroll-contain pb-16 sm:pb-6">
               {boletoErrorMsg && (
                 <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2 animate-in fade-in">
                   <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
@@ -2118,12 +2119,14 @@ export const ExpensesValesView: React.FC<ExpensesValesViewProps> = ({
                 />
               </div>
 
-              {/* Botões */}
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+              </div>
+
+              {/* Botões - Docked Footer */}
+              <div className="p-3 sm:px-6 bg-slate-50 border-t border-slate-200 flex justify-end gap-2 shrink-0">
                 <button
                   type="button"
                   onClick={() => setIsBoletoModalOpen(false)}
-                  className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-semibold cursor-pointer"
+                  className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100 font-semibold cursor-pointer"
                 >
                   Cancelar
                 </button>
@@ -2142,9 +2145,9 @@ export const ExpensesValesView: React.FC<ExpensesValesViewProps> = ({
 
       {/* MODAL: PAGAR BOLETO */}
       {payingBoleto && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 overflow-y-auto">
-          <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl border border-slate-200 p-6 space-y-4 my-8 animate-in fade-in zoom-in-95">
-            <div className="flex justify-between items-center pb-3 border-b border-slate-100">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-2 sm:p-4 overflow-y-auto animate-in fade-in">
+          <div className="w-full max-w-md max-h-[92dvh] sm:max-h-[90vh] bg-white rounded-2xl sm:rounded-3xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden my-auto animate-in fade-in zoom-in-95">
+            <div className="flex justify-between items-center p-4 sm:p-5 border-b border-slate-100 shrink-0">
               <div className="flex items-center gap-2">
                 <div className="p-2 rounded-xl bg-emerald-100 text-emerald-900">
                   <Check className="w-5 h-5 text-emerald-800" />
@@ -2160,13 +2163,14 @@ export const ExpensesValesView: React.FC<ExpensesValesViewProps> = ({
               </div>
               <button
                 onClick={() => setPayingBoleto(null)}
-                className="p-2 text-slate-400 hover:text-slate-600 rounded-xl"
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-xl cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleConfirmPayBoleto} className="space-y-4 text-xs">
+            <form onSubmit={handleConfirmPayBoleto} className="flex-1 flex flex-col min-h-0 overflow-hidden text-xs">
+              <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 overscroll-contain pb-16 sm:pb-6">
               {payBoletoErrorMsg && (
                 <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2 animate-in fade-in">
                   <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
@@ -2297,11 +2301,14 @@ export const ExpensesValesView: React.FC<ExpensesValesViewProps> = ({
                 />
               </div>
 
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+              </div>
+
+              {/* Docked footer */}
+              <div className="p-3 sm:px-6 bg-slate-50 border-t border-slate-200 flex justify-end gap-2 shrink-0">
                 <button
                   type="button"
                   onClick={() => setPayingBoleto(null)}
-                  className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-semibold cursor-pointer"
+                  className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100 font-semibold cursor-pointer"
                 >
                   Voltar
                 </button>

@@ -28,11 +28,13 @@ import {
   AuditLog,
   UserProfile,
   UserRole,
-  FinancialCategory
+  FinancialCategory,
+  CashWithdrawal
 } from '../types';
 
 interface FinanceContextType {
   closures: DailyClosure[];
+  cashWithdrawals: CashWithdrawal[];
   expenses: Expense[];
   vales: Vale[];
   boletos: Boleto[];
@@ -58,6 +60,10 @@ interface FinanceContextType {
   deleteBankTransaction: (transactionId: string, reason?: string) => Promise<void>;
   deleteAccountStatement: (accountId: string, transactionIds?: string[], reason?: string) => Promise<void>;
   clearAuditHistory: (logIds?: string[]) => Promise<void>;
+  
+  // Cash Withdrawals (Saídas de Caixa no Fechamento)
+  createCashWithdrawal: (data: Omit<CashWithdrawal, 'id' | 'createdAt' | 'updatedAt' | 'status'>) => Promise<string>;
+  cancelCashWithdrawal: (id: string, reason: string) => Promise<void>;
   
   createExpense: (data: Omit<Expense, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'>) => Promise<string>;
   cancelExpense: (expenseId: string, reason: string) => Promise<void>;
@@ -109,6 +115,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const { currentUser, isAdmin } = useAuth();
 
   const [closures, setClosures] = useState<DailyClosure[]>([]);
+  const [cashWithdrawals, setCashWithdrawals] = useState<CashWithdrawal[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [vales, setVales] = useState<Vale[]>([]);
   const [boletos, setBoletos] = useState<Boleto[]>([]);
@@ -289,6 +296,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
   useEffect(() => {
     if (!currentUser) {
       setClosures([]);
+      setCashWithdrawals([]);
       setExpenses([]);
       setVales([]);
       setBoletos([]);
@@ -314,6 +322,16 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setClosures(items);
       },
       (error) => handleFirestoreError(error, OperationType.GET, 'closures')
+    );
+
+    const unsubWithdrawals = onSnapshot(
+      collection(db, 'cash_withdrawals'),
+      (snapshot) => {
+        const items = snapshot.docs.map((d) => d.data() as CashWithdrawal);
+        items.sort((a, b) => (b.dateTime || b.createdAt).localeCompare(a.dateTime || a.createdAt));
+        setCashWithdrawals(items);
+      },
+      (error) => handleFirestoreError(error, OperationType.GET, 'cash_withdrawals')
     );
 
     const unsubExpenses = onSnapshot(
@@ -423,6 +441,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     return () => {
       unsubClosures();
+      unsubWithdrawals();
       unsubExpenses();
       unsubVales();
       unsubBoletos();
@@ -467,7 +486,81 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
-  // 1. SAVE CLOSURE
+  // 1. CASH WITHDRAWALS (Saídas de Caixa no Fechamento de Caixa)
+  const createCashWithdrawal = async (
+    data: Omit<CashWithdrawal, 'id' | 'createdAt' | 'updatedAt' | 'status'>
+  ): Promise<string> => {
+    // Verificar se o caixa do dia e operador já foi fechado definitivamente
+    const existingClosure = closures.find(
+      (c) => c.date === data.date && c.cashierName.trim().toLowerCase() === data.cashierName.trim().toLowerCase()
+    );
+    if (existingClosure && existingClosure.status === 'closed' && !isAdmin) {
+      throw new Error(
+        'Este caixa já foi encerrado definitivamente para este dia. Solicite a reabertura por um administrador para lançar saídas.'
+      );
+    }
+
+    const id = 'cwith_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4);
+    const now = new Date().toISOString();
+    const newWithdrawal: CashWithdrawal = {
+      ...data,
+      id,
+      status: 'active',
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    try {
+      await setDoc(doc(db, 'cash_withdrawals', id), sanitizeForFirestore(newWithdrawal));
+      await logAudit(
+        'create',
+        'closure',
+        id,
+        `Saída de caixa registrada: R$ ${data.amount.toFixed(2)} (${data.paymentMethod === 'dinheiro' ? 'Dinheiro Físico' : 'Pix'}) - Motivo: "${data.reason}" (Caixa: ${data.cashierName}, Responsável: ${data.responsibleName})`
+      );
+      return id;
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, `cash_withdrawals/${id}`);
+      throw err;
+    }
+  };
+
+  const cancelCashWithdrawal = async (id: string, reason: string): Promise<void> => {
+    const item = cashWithdrawals.find((w) => w.id === id);
+    if (!item) throw new Error('Lançamento de saída não encontrado.');
+
+    const existingClosure = closures.find(
+      (c) => c.date === item.date && c.cashierName.trim().toLowerCase() === item.cashierName.trim().toLowerCase()
+    );
+    if (existingClosure && existingClosure.status === 'closed' && !isAdmin) {
+      throw new Error(
+        'O caixa vinculado a esta saída já está encerrado definitivamente. Solicite a reabertura por um administrador para efetuar cancelamentos ou correções.'
+      );
+    }
+
+    const now = new Date().toISOString();
+    try {
+      await updateDoc(doc(db, 'cash_withdrawals', id), {
+        status: 'cancelled',
+        cancellationReason: reason.trim(),
+        cancelledBy: currentUser?.displayName || currentUser?.username || 'admin',
+        cancelledAt: now,
+        updatedAt: now,
+      });
+
+      await logAudit(
+        'cancel',
+        'closure',
+        id,
+        `Cancelamento de saída de caixa: R$ ${item.amount.toFixed(2)} (${item.paymentMethod.toUpperCase()}) - Motivo: "${reason.trim()}" (Responsável: ${currentUser?.displayName || currentUser?.username})`
+      );
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `cash_withdrawals/${id}`);
+      throw err;
+    }
+  };
+
+  // 2. SAVE CLOSURE
   // O módulo Fechamento Diário é exclusivamente para controle interno do mercadinho e geração de relatórios.
   // Tudo o que for lançado no fechamento diário permanece estritamente restrito a esse módulo.
   // Não altera saldo de nenhuma conta, não gera movimentações no extrato bancário, não alimenta cartão de saldo e não cria receitas/despesas automáticas.
@@ -477,25 +570,53 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const id = 'cls_' + Date.now();
     const now = new Date().toISOString();
 
+    // Active withdrawals for this date and cashier
+    const dateCashierWithdrawals = cashWithdrawals.filter(
+      (w) =>
+        w.date === data.date &&
+        w.cashierName.trim().toLowerCase() === data.cashierName.trim().toLowerCase() &&
+        w.status === 'active'
+    );
+    const pixWithdrawalsSum = dateCashierWithdrawals
+      .filter((w) => w.paymentMethod === 'pix')
+      .reduce((acc, curr) => acc + curr.amount, 0);
+
+    const expensesPix = data.expensesPix !== undefined ? Number(data.expensesPix) : pixWithdrawalsSum;
+    const expensesCash = Number(data.expensesCash || 0);
+    const valesCash = Number(data.valesCash || 0);
+    const cashIn = Number(data.cashIn || 0);
+    const pixIn = Number(data.pixIn || 0);
+
     // Calculations enforced by financial rules
     const totalSales =
-      Number(data.cashIn || 0) +
-      Number(data.pixIn || 0) +
+      cashIn +
+      pixIn +
       Number(data.creditCardIn || 0) +
       Number(data.debitCardIn || 0) +
       Number(data.otherIn || 0);
 
+    const netCash = cashIn - expensesCash;
+    const netPix = pixIn - expensesPix;
+    const totalExpenses = expensesCash + expensesPix + valesCash;
+    const netTotal = totalSales - totalExpenses;
+
     const expectedCash =
       Number(data.initialCash || 0) +
-      Number(data.cashIn || 0) -
-      Number(data.expensesCash || 0) -
-      Number(data.valesCash || 0);
+      cashIn -
+      expensesCash -
+      valesCash;
 
     const cashDifference = Number(data.countedCash || 0) - expectedCash;
 
     const newClosure: DailyClosure = {
       ...data,
       id,
+      expensesCash,
+      expensesPix,
+      netCash,
+      netPix,
+      totalExpenses,
+      netTotal,
       totalSales,
       expectedCash,
       cashDifference,
@@ -509,16 +630,29 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
       // Save closure document strictly into 'closures'
       await setDoc(doc(db, 'closures', id), sanitizeForFirestore(newClosure));
 
+      // Link any active withdrawals of this cashier/day to this closure
+      if (dateCashierWithdrawals.length > 0) {
+        const batch = writeBatch(db);
+        dateCashierWithdrawals.forEach((w) => {
+          batch.update(doc(db, 'cash_withdrawals', w.id), {
+            closureId: id,
+            updatedAt: now,
+          });
+        });
+        await batch.commit();
+      }
+
       await logAudit(
         'create',
         'closure',
         id,
-        `Fechamento de caixa registrado para ${data.date} (Caixa: ${data.cashierName}). Vendas totais: R$ ${totalSales.toFixed(2)}, Diferença em dinheiro: R$ ${cashDifference.toFixed(2)}. (Controle interno exclusivo do fechamento)`
+        `Fechamento de caixa registrado para ${data.date} (Caixa: ${data.cashierName}). Vendas totais: R$ ${totalSales.toFixed(2)}, Líquido Dinheiro: R$ ${netCash.toFixed(2)}, Líquido Pix: R$ ${netPix.toFixed(2)}, Diferença em dinheiro: R$ ${cashDifference.toFixed(2)}. (Controle interno exclusivo do fechamento)`
       );
 
       return id;
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `closures/${id}`);
+      throw error;
     }
   };
 
@@ -1807,6 +1941,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     <FinanceContext.Provider
       value={{
         closures,
+        cashWithdrawals,
         expenses,
         vales,
         boletos,
@@ -1823,6 +1958,8 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         activeBankAccount: computedActiveBankAccount,
         setActiveBankAccount,
         saveClosure,
+        createCashWithdrawal,
+        cancelCashWithdrawal,
         reopenClosure,
         updateClosure,
         deleteClosure,

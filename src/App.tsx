@@ -18,6 +18,7 @@ import { ReportsView } from './components/ReportsView';
 import { UsersSecurityView } from './components/UsersSecurityView';
 import { AuthModal } from './components/AuthModal';
 import { PWAInstallButton } from './components/PWAInstallButton';
+import { FloatingCalculator } from './components/FloatingCalculator';
 
 import {
   LayoutDashboard,
@@ -407,6 +408,9 @@ function MainLayout() {
             <span>Mais</span>
           </button>
         </nav>
+
+        {/* Floating Calculator for Administrative Calculations */}
+        <FloatingCalculator />
       </div>
     </div>
   );

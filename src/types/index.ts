@@ -60,6 +60,28 @@ export interface BankAllocation {
   status: 'confirmado' | 'pendente_liquidacao';
 }
 
+export type CashWithdrawalPaymentMethod = 'dinheiro' | 'pix';
+
+export interface CashWithdrawal {
+  id: string;
+  closureId?: string;
+  date: string; // YYYY-MM-DD
+  time: string; // HH:mm:ss
+  dateTime: string; // ISO string
+  cashierName: string;
+  reason: string;
+  amount: number;
+  paymentMethod: CashWithdrawalPaymentMethod;
+  responsibleUid: string;
+  responsibleName: string;
+  status: 'active' | 'cancelled';
+  cancellationReason?: string;
+  cancelledBy?: string;
+  cancelledAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface DailyClosure {
   id: string;
   date: string; // YYYY-MM-DD
@@ -74,11 +96,16 @@ export interface DailyClosure {
   otherIn: number;
   otherInDescription?: string;
   expensesCash: number;
+  expensesPix?: number; // Total de saídas pagas via Pix
   valesCash: number;
   countedCash: number;
   expectedCash: number;
   cashDifference: number; // countedCash - expectedCash (positive = sobra, negative = falta)
   totalSales: number; // cashIn + pixIn + creditCardIn + debitCardIn + otherIn
+  netCash?: number; // Total entradas dinheiro - saídas dinheiro
+  netPix?: number; // Total entradas Pix - saídas Pix
+  totalExpenses?: number; // Total geral de saídas (expensesCash + expensesPix + valesCash)
+  netTotal?: number; // Movimento líquido total (totalSales - totalExpenses)
   status: 'closed' | 'reopened';
   notes?: string;
   bankAllocations?: BankAllocation[];

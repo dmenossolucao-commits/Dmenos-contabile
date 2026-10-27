@@ -10,14 +10,42 @@ export function formatCurrency(value: number | null | undefined): string {
   }).format(num);
 }
 
-export function parseCurrencyInput(valueStr: string): number {
-  if (!valueStr) return 0;
-  // Remove R$, spaces, dots (thousands) and replace comma with dot
-  const clean = valueStr
-    .replace(/[R$\s]/g, '')
-    .replace(/\./g, '')
-    .replace(',', '.');
-  const parsed = parseFloat(clean);
+export function parseCurrencyInput(valueStr: string | number | null | undefined): number {
+  if (valueStr === undefined || valueStr === null || valueStr === '') return 0;
+  if (typeof valueStr === 'number') return isNaN(valueStr) ? 0 : valueStr;
+
+  let str = String(valueStr).trim().replace(/[R$\s]/g, '');
+  if (!str) return 0;
+
+  // Case 1: Both dot and comma exist: "1.250,50" or "1,250.50"
+  if (str.includes('.') && str.includes(',')) {
+    const lastDot = str.lastIndexOf('.');
+    const lastComma = str.lastIndexOf(',');
+    if (lastComma > lastDot) {
+      // Standard BR: 1.250,50 -> remove dots, replace comma with dot
+      str = str.replace(/\./g, '').replace(',', '.');
+    } else {
+      // US style: 1,250.50 -> remove commas
+      str = str.replace(/,/g, '');
+    }
+  } else if (str.includes(',')) {
+    // Only comma: "10,50" -> "10.50"
+    str = str.replace(',', '.');
+  } else if (str.includes('.')) {
+    // Only dot: e.g. "10.50" or "1.000.000"
+    const dotParts = str.split('.');
+    if (dotParts.length === 2) {
+      // Exactly one dot. If decimals part is 2 digits or not 3 digits, it's definitely a decimal point.
+      // E.g. "10.50" -> 10.50, "10.5" -> 10.5
+      // Even if 3 digits, on modern mobile numeric keyboards decimal dot is typed for cents.
+      str = dotParts[0] + '.' + dotParts[1];
+    } else {
+      // Multiple dots: "1.000.000" -> thousands separators
+      str = str.replace(/\./g, '');
+    }
+  }
+
+  const parsed = parseFloat(str);
   return isNaN(parsed) ? 0 : parsed;
 }
 
