@@ -53,11 +53,15 @@ service cloud.firestore {
     }
 
     match /bank_accounts/{accountId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow create, update: if (!('visibility' in request.resource.data) || request.resource.data.visibility != 'private' || ('ownerUid' in request.resource.data && request.resource.data.ownerUid is string));
+      allow delete: if resource != null;
     }
 
     match /bank_transactions/{transactionId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow create, update: if (!('visibility' in request.resource.data) || request.resource.data.visibility != 'private' || ('ownerUid' in request.resource.data && request.resource.data.ownerUid is string));
+      allow delete: if resource != null;
     }
 
     match /receivables/{receivableId} {
@@ -65,6 +69,10 @@ service cloud.firestore {
     }
 
     match /calendar_notes/{noteId} {
+      allow read, write: if true;
+    }
+
+    match /notepad_notes/{noteId} {
       allow read, write: if true;
     }
 

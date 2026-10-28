@@ -78,6 +78,11 @@ export interface CashWithdrawal {
   cancellationReason?: string;
   cancelledBy?: string;
   cancelledAt?: string;
+  debitFromBankAccount?: boolean;
+  bankAccountId?: string;
+  bankAccountName?: string;
+  bankTransactionId?: string;
+  linkedOperationId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -218,6 +223,9 @@ export interface BankAccount {
   initialBalanceDate: string;
   currentBalance: number;
   status: 'active' | 'inactive';
+  visibility?: 'shared' | 'private';
+  ownerUid?: string;
+  ownerUsername?: string;
   notes?: string;
   createdAt: string;
   updatedAt: string;
@@ -241,6 +249,10 @@ export interface BankTransaction {
   category: string;
   amount: number; // positive for inflows, negative for outflows
   type: BankTransactionType;
+  visibility?: 'shared' | 'private';
+  ownerUid?: string;
+  cashWithdrawalId?: string;
+  linkedOperationId?: string;
   relatedAccountId?: string;
   relatedAccountName?: string;
   relatedTransferId?: string;
@@ -306,12 +318,46 @@ export interface CalendarNote {
 
 export interface AuditLog {
   id: string;
-  action: 'create' | 'update' | 'cancel' | 'reopen' | 'settle' | 'delete' | 'login' | 'password_reset';
-  entityType: 'closure' | 'expense' | 'vale' | 'boleto' | 'bank_account' | 'bank_transaction' | 'receivable' | 'calendar_note' | 'user' | 'auth' | 'audit_log' | 'category';
+  action: 'create' | 'update' | 'cancel' | 'reopen' | 'settle' | 'delete' | 'login' | 'password_reset' | 'review';
+  entityType: 'closure' | 'expense' | 'vale' | 'boleto' | 'bank_account' | 'bank_transaction' | 'receivable' | 'calendar_note' | 'notepad_note' | 'user' | 'auth' | 'audit_log' | 'category';
   entityId: string;
   details: string;
   userUid: string;
   userUsername?: string;
   userEmail?: string;
   createdAt: string;
+}
+
+export type NotepadCategory = 
+  | 'geral' 
+  | 'aviso_caixa' 
+  | 'pendencia' 
+  | 'lembrete' 
+  | 'revisao_gerente' 
+  | 'fornecedor' 
+  | 'financeiro' 
+  | 'manutencao';
+
+export type NotepadPriority = 'baixa' | 'media' | 'alta';
+
+export type NotepadStatus = 'pendente' | 'em_analise' | 'revisado' | 'arquivado';
+
+export interface NotepadNote {
+  id: string;
+  title: string;
+  content: string;
+  category: NotepadCategory;
+  priority: NotepadPriority;
+  status: NotepadStatus;
+  isPinned?: boolean;
+  targetDate?: string; // YYYY-MM-DD (data para revisão)
+  authorUid: string;
+  authorName: string;
+  authorRole?: string;
+  reviewedAt?: string;
+  reviewedByUid?: string;
+  reviewedByName?: string;
+  reviewNotes?: string;
+  createdAt: string;
+  updatedAt: string;
 }

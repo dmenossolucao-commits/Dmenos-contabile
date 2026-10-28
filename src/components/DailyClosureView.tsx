@@ -1,13 +1,14 @@
 import React, { useState, useMemo } from 'react';
 import { useFinance } from '../context/FinanceContext';
 import { useAuth } from '../context/AuthContext';
-import { DailyClosure, BankAllocation, CashWithdrawal } from '../types';
+import { DailyClosure, BankAllocation, CashWithdrawal, BankAccount, BankTransaction } from '../types';
 import {
   formatCurrency,
   formatDateBR,
   formatDateTimeBR,
   getTodayDateBR,
-  parseCurrencyInput
+  parseCurrencyInput,
+  computeBankAccountBalance
 } from '../utils/formatters';
 import {
   generateClosurePDF,
@@ -56,6 +57,7 @@ export const DailyClosureView: React.FC<DailyClosureViewProps> = ({
     closures,
     cashWithdrawals,
     bankAccounts,
+    bankTransactions,
     saveClosure,
     reopenClosure,
     updateClosure,
@@ -107,6 +109,10 @@ export const DailyClosureView: React.FC<DailyClosureViewProps> = ({
   const [isSubmittingWithdrawal, setIsSubmittingWithdrawal] = useState(false);
   const [withdrawalError, setWithdrawalError] = useState('');
 
+  // Débito bancário opcional nas retiradas via Pix (padrão: DESMARCADA)
+  const [withdrawalDebitFromBank, setWithdrawalDebitFromBank] = useState(false);
+  const [withdrawalBankAccountId, setWithdrawalBankAccountId] = useState('');
+
   // Cash Withdrawal Cancellation Modal State
   const [withdrawalToCancel, setWithdrawalToCancel] = useState<CashWithdrawal | null>(null);
   const [cancelWithdrawalReason, setCancelWithdrawalReason] = useState('');
@@ -135,10 +141,14 @@ export const DailyClosureView: React.FC<DailyClosureViewProps> = ({
   const [notes, setNotes] = useState('');
 
   // Bank Allocations for non-cash proceeds
-  const [pixTargetAccountId, setPixTargetAccountId] = useState(bankAccounts[0]?.id || '');
-  const [creditTargetAccountId, setCreditTargetAccountId] = useState(bankAccounts[0]?.id || '');
+  const eligibleSharedBankAccounts = useMemo(() => {
+    return bankAccounts.filter((a) => a.status === 'active' && a.visibility !== 'private');
+  }, [bankAccounts]);
+
+  const [pixTargetAccountId, setPixTargetAccountId] = useState(eligibleSharedBankAccounts[0]?.id || '');
+  const [creditTargetAccountId, setCreditTargetAccountId] = useState(eligibleSharedBankAccounts[0]?.id || '');
   const [creditFeeRate, setCreditFeeRate] = useState('3.5'); // 3.5%
-  const [debitTargetAccountId, setDebitTargetAccountId] = useState(bankAccounts[0]?.id || '');
+  const [debitTargetAccountId, setDebitTargetAccountId] = useState(eligibleSharedBankAccounts[0]?.id || '');
   const [debitFeeRate, setDebitFeeRate] = useState('1.5'); // 1.5%
 
   // Parsed Numerical Values
@@ -297,6 +307,31 @@ export const DailyClosureView: React.FC<DailyClosureViewProps> = ({
       return;
     }
 
+    let targetBankAcc: BankAccount | undefined;
+    if (withdrawalPaymentMethod === 'pix' && withdrawalDebitFromBank) {
+      if (!withdrawalBankAccountId) {
+        setWithdrawalError('Por favor, selecione a conta bancária da qual o valor do Pix será debitado.');
+        return;
+      }
+      targetBankAcc = eligibleSharedBankAccounts.find((a) => a.id === withdrawalBankAccountId);
+      if (!targetBankAcc) {
+        setWithdrawalError('Conta bancária selecionada não é elegível para débito.');
+        return;
+      }
+      const accTxs = bankTransactions.filter(
+        (t) => t.accountId === targetBankAcc!.id && t.status === 'active'
+      );
+      const { currentBalance } = computeBankAccountBalance(targetBankAcc, accTxs);
+      if (currentBalance < amount) {
+        setWithdrawalError(
+          `Saldo insuficiente na conta "${targetBankAcc.name}". Saldo disponível: ${formatCurrency(
+            currentBalance
+          )}, valor do Pix: ${formatCurrency(amount)}.`
+        );
+        return;
+      }
+    }
+
     setIsSubmittingWithdrawal(true);
     try {
       const now = new Date();
@@ -312,18 +347,25 @@ export const DailyClosureView: React.FC<DailyClosureViewProps> = ({
         reason: withdrawalReason.trim(),
         amount,
         paymentMethod: withdrawalPaymentMethod,
+        debitFromBankAccount: withdrawalPaymentMethod === 'pix' && withdrawalDebitFromBank,
+        bankAccountId: targetBankAcc?.id,
+        bankAccountName: targetBankAcc?.name,
         responsibleUid: currentUser?.id || 'anon',
         responsibleName: currentUser?.displayName || currentUser?.username || 'Operador',
       });
 
       showToast(
-        `Saída de R$ ${amount.toFixed(2)} (${withdrawalPaymentMethod === 'dinheiro' ? 'Dinheiro Físico' : 'Pix'}) registrada com sucesso!`,
+        `Saída de R$ ${amount.toFixed(2)} (${
+          withdrawalPaymentMethod === 'dinheiro' ? 'Dinheiro Físico' : 'Pix'
+        }${targetBankAcc ? ` com débito em ${targetBankAcc.name}` : ''}) registrada com sucesso!`,
         'success'
       );
       setIsWithdrawalModalOpen(false);
       setWithdrawalReason('');
       setWithdrawalAmountStr('');
       setWithdrawalPaymentMethod('dinheiro');
+      setWithdrawalDebitFromBank(false);
+      setWithdrawalBankAccountId('');
     } catch (err: any) {
       setWithdrawalError(err.message || 'Erro ao registrar saída de caixa.');
     } finally {
@@ -813,6 +855,12 @@ export const DailyClosureView: React.FC<DailyClosureViewProps> = ({
                                   </>
                                 )}
                               </span>
+                              {w.debitFromBankAccount && (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-teal-50 text-teal-800 border border-teal-200 font-bold inline-flex items-center gap-1">
+                                  <Landmark className="w-2.5 h-2.5 text-teal-700" />
+                                  Debitado: {w.bankAccountName || 'Banco'}
+                                </span>
+                              )}
                               <span className="text-[11px] text-slate-400 flex items-center gap-1">
                                 <Clock className="w-3 h-3" />
                                 {w.time || formatDateTimeBR(w.dateTime || w.createdAt).split(' ')[1]}
@@ -924,6 +972,11 @@ export const DailyClosureView: React.FC<DailyClosureViewProps> = ({
                                   </>
                                 )}
                               </span>
+                              {w.debitFromBankAccount && (
+                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-teal-50 text-teal-800 border border-teal-200 font-bold block mt-1">
+                                  Debitado: {w.bankAccountName || 'Banco'}
+                                </span>
+                              )}
                             </td>
                             <td className="py-2.5 px-3 whitespace-nowrap text-slate-600">
                               <div className="font-medium text-slate-800">{w.responsibleName}</div>
@@ -2211,6 +2264,107 @@ export const DailyClosureView: React.FC<DailyClosureViewProps> = ({
                   </div>
                 </div>
 
+                {/* Opção Opcional: Débito Bancário para Saída via Pix */}
+                {withdrawalPaymentMethod === 'pix' && (
+                  <div className="p-3.5 rounded-xl bg-teal-50/70 border border-teal-200/80 space-y-3 animate-in fade-in duration-150">
+                    <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={withdrawalDebitFromBank}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setWithdrawalDebitFromBank(checked);
+                          if (checked && !withdrawalBankAccountId && eligibleSharedBankAccounts.length > 0) {
+                            setWithdrawalBankAccountId(eligibleSharedBankAccounts[0].id);
+                          }
+                        }}
+                        className="w-4 h-4 rounded text-teal-700 border-slate-300 focus:ring-teal-600 mt-0.5 cursor-pointer"
+                      />
+                      <div>
+                        <span className="font-bold text-slate-800 block text-xs">
+                          Debitar este valor de uma conta bancária
+                        </span>
+                        <span className="text-[11px] text-slate-500 block leading-tight mt-0.5">
+                          Gera uma saída automática no extrato bancário vinculado e atualiza o saldo da conta selecionada.
+                        </span>
+                      </div>
+                    </label>
+
+                    {withdrawalDebitFromBank && (
+                      <div className="pt-2.5 border-t border-teal-200/70 space-y-2 animate-in fade-in duration-150">
+                        <label className="block text-xs font-semibold text-slate-700">
+                          Conta Bancária para Débito *
+                        </label>
+                        {eligibleSharedBankAccounts.length > 0 ? (
+                          <>
+                            <select
+                              required
+                              value={withdrawalBankAccountId}
+                              onChange={(e) => setWithdrawalBankAccountId(e.target.value)}
+                              className="w-full p-2.5 rounded-xl border border-teal-300 bg-white text-xs font-medium text-slate-900 focus:ring-2 focus:ring-teal-600 focus:outline-none"
+                            >
+                              {eligibleSharedBankAccounts.map((acc) => {
+                                const accTxs = bankTransactions.filter(
+                                  (t) => t.accountId === acc.id && t.status === 'active'
+                                );
+                                const { currentBalance } = computeBankAccountBalance(acc, accTxs);
+                                return (
+                                  <option key={acc.id} value={acc.id}>
+                                    {acc.bankName} — {acc.name} (Saldo: {formatCurrency(currentBalance)})
+                                  </option>
+                                );
+                              })}
+                            </select>
+
+                            {(() => {
+                              const selectedAcc =
+                                eligibleSharedBankAccounts.find((a) => a.id === withdrawalBankAccountId) ||
+                                eligibleSharedBankAccounts[0];
+                              if (!selectedAcc) return null;
+
+                              const accTxs = bankTransactions.filter(
+                                (t) => t.accountId === selectedAcc.id && t.status === 'active'
+                              );
+                              const { currentBalance } = computeBankAccountBalance(selectedAcc, accTxs);
+                              const requestedAmt = parseCurrencyInput(withdrawalAmountStr);
+                              const isInsufficient = requestedAmt > 0 && currentBalance < requestedAmt;
+
+                              return (
+                                <div
+                                  className={`p-2.5 rounded-xl border text-[11px] flex items-center justify-between ${
+                                    isInsufficient
+                                      ? 'bg-rose-50 border-rose-200 text-rose-800'
+                                      : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                                  }`}
+                                >
+                                  <span className="flex items-center gap-1.5 font-medium">
+                                    <Landmark className="w-3.5 h-3.5" />
+                                    Saldo disponível na conta:
+                                  </span>
+                                  <span className="font-bold">
+                                    {formatCurrency(currentBalance)}
+                                    {requestedAmt > 0 && (
+                                      <span className="text-[10px] font-normal block text-right">
+                                        {isInsufficient
+                                          ? `Falta ${formatCurrency(requestedAmt - currentBalance)}`
+                                          : `Saldo restante: ${formatCurrency(currentBalance - requestedAmt)}`}
+                                      </span>
+                                    )}
+                                  </span>
+                                </div>
+                              );
+                            })()}
+                          </>
+                        ) : (
+                          <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-[11px] text-amber-800">
+                            Nenhuma conta bancária compartilhada ativa disponível para débito. Cadastre uma conta no módulo bancário.
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Informações Automáticas de Sistema */}
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 space-y-1.5 text-xs">
                   <div className="flex justify-between text-slate-600">
@@ -2311,7 +2465,23 @@ export const DailyClosureView: React.FC<DailyClosureViewProps> = ({
                 <span className="text-slate-500">Registrado por:</span>
                 <span className="text-slate-700">{withdrawalToCancel.responsibleName}</span>
               </div>
+              {withdrawalToCancel.debitFromBankAccount && (
+                <div className="flex justify-between pt-1 border-t border-slate-200/60 font-semibold text-teal-800">
+                  <span>Débito em Conta:</span>
+                  <span>{withdrawalToCancel.bankAccountName || 'Conta Bancária'}</span>
+                </div>
+              )}
             </div>
+
+            {withdrawalToCancel.debitFromBankAccount && (
+              <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
+                <div>
+                  <strong className="block font-semibold">Estorno Bancário Automático</strong>
+                  Esta saída de Pix foi debitada da conta <strong>{withdrawalToCancel.bankAccountName || 'vinculada'}</strong>. Ao confirmar o cancelamento, o lançamento bancário correspondente será <strong>estornado automaticamente</strong> e o saldo será devolvido à conta.
+                </div>
+              </div>
+            )}
 
             <form onSubmit={handleConfirmCancelWithdrawal} className="space-y-4">
               <div>

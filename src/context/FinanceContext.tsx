@@ -29,7 +29,11 @@ import {
   UserProfile,
   UserRole,
   FinancialCategory,
-  CashWithdrawal
+  CashWithdrawal,
+  NotepadNote,
+  NotepadCategory,
+  NotepadPriority,
+  NotepadStatus
 } from '../types';
 
 interface FinanceContextType {
@@ -45,6 +49,7 @@ interface FinanceContextType {
   bankTransactions: BankTransaction[];
   receivables: Receivable[];
   calendarNotes: CalendarNote[];
+  notepadNotes: NotepadNote[];
   auditLogs: AuditLog[];
   systemUsers: UserProfile[];
   loading: boolean;
@@ -105,6 +110,21 @@ interface FinanceContextType {
   toggleCalendarNoteStatus: (id: string) => Promise<void>;
   deleteCalendarNote: (id: string) => Promise<void>;
 
+  // Notepad Notes (Bloco de Notas & Revisão Posterior)
+  createNotepadNote: (data: {
+    title: string;
+    content: string;
+    category: NotepadCategory;
+    priority: NotepadPriority;
+    targetDate?: string;
+    isPinned?: boolean;
+    status?: NotepadStatus;
+  }) => Promise<string>;
+  updateNotepadNote: (id: string, data: Partial<NotepadNote>) => Promise<void>;
+  deleteNotepadNote: (id: string, reason?: string) => Promise<void>;
+  reviewNotepadNote: (id: string, reviewNotes?: string, newStatus?: NotepadStatus) => Promise<void>;
+  toggleNotepadNotePin: (id: string) => Promise<void>;
+
   updateUserRole: (userId: string, role: UserRole) => Promise<void>;
   refreshAll: () => Promise<void>;
 }
@@ -124,6 +144,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [bankTransactions, setBankTransactions] = useState<BankTransaction[]>([]);
   const [receivables, setReceivables] = useState<Receivable[]>([]);
   const [calendarNotes, setCalendarNotes] = useState<CalendarNote[]>([]);
+  const [notepadNotes, setNotepadNotes] = useState<NotepadNote[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [systemUsers, setSystemUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -305,6 +326,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setBankTransactions([]);
       setReceivables([]);
       setCalendarNotes([]);
+      setNotepadNotes([]);
       setAuditLogs([]);
       setSystemUsers([]);
       setLoading(false);
@@ -377,10 +399,16 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const unsubAccounts = onSnapshot(
       collection(db, 'bank_accounts'),
       (snapshot) => {
-        const items = snapshot.docs.map((d) => d.data() as BankAccount);
+        const rawItems = snapshot.docs.map((d) => d.data() as BankAccount);
+        // Isolamento de privacidade real: contas privadas são visíveis exclusivamente ao proprietário
+        const items = rawItems.filter(
+          (a) => a.visibility !== 'private' || a.ownerUid === currentUser?.id
+        );
         setBankAccounts(items);
-        if (items.length > 0 && !activeBankAccount) {
-          setActiveBankAccount(items[0]);
+        if (items.length > 0 && (!activeBankAccount || !items.some((a) => a.id === activeBankAccount.id))) {
+          // Prefere primeira conta compartilhada como padrão, se existir
+          const defaultShared = items.find((a) => a.visibility !== 'private');
+          setActiveBankAccount(defaultShared || items[0]);
         }
       },
       (error) => handleFirestoreError(error, OperationType.GET, 'bank_accounts')
@@ -389,7 +417,11 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const unsubTransactions = onSnapshot(
       collection(db, 'bank_transactions'),
       (snapshot) => {
-        const items = snapshot.docs.map((d) => d.data() as BankTransaction);
+        const rawItems = snapshot.docs.map((d) => d.data() as BankTransaction);
+        // Isolamento de privacidade real: movimentações privadas pertencem exclusivamente ao proprietário
+        const items = rawItems.filter(
+          (t) => t.visibility !== 'private' || t.ownerUid === currentUser?.id
+        );
         items.sort((a, b) => b.date.localeCompare(a.date));
         setBankTransactions(items);
       },
@@ -414,6 +446,21 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setCalendarNotes(items);
       },
       (error) => handleFirestoreError(error, OperationType.GET, 'calendar_notes')
+    );
+
+    const unsubNotepad = onSnapshot(
+      collection(db, 'notepad_notes'),
+      (snapshot) => {
+        const items = snapshot.docs.map((d) => d.data() as NotepadNote);
+        // Sort: pinned first, then by createdAt descending
+        items.sort((a, b) => {
+          if (a.isPinned && !b.isPinned) return -1;
+          if (!a.isPinned && b.isPinned) return 1;
+          return (b.createdAt || '').localeCompare(a.createdAt || '');
+        });
+        setNotepadNotes(items);
+      },
+      (error) => handleFirestoreError(error, OperationType.GET, 'notepad_notes')
     );
 
     const unsubAudit = onSnapshot(
@@ -450,6 +497,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
       unsubTransactions();
       unsubReceivables();
       unsubCalendar();
+      unsubNotepad();
       unsubAudit();
       unsubUsers();
     };
@@ -502,21 +550,94 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     const id = 'cwith_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4);
     const now = new Date().toISOString();
+
+    let linkedBankTransactionId: string | undefined;
+    let linkedOpId: string | undefined;
+    let targetBankAccount: BankAccount | undefined;
+
+    // Se o usuário optou por debitar a saída via Pix de uma conta bancária
+    if (data.debitFromBankAccount && data.paymentMethod === 'pix') {
+      if (!data.bankAccountId) {
+        throw new Error('Por favor, selecione a conta bancária para debitar a saída via Pix.');
+      }
+      targetBankAccount = bankAccounts.find((a) => a.id === data.bankAccountId);
+      if (!targetBankAccount) {
+        throw new Error('Conta bancária selecionada não foi encontrada.');
+      }
+      if (targetBankAccount.status === 'inactive') {
+        throw new Error('A conta bancária selecionada está inativa e não pode receber débitos.');
+      }
+      if (targetBankAccount.visibility === 'private') {
+        throw new Error('Não é permitido debitar saídas de caixa de contas bancárias privadas.');
+      }
+
+      // Validação de saldo disponível
+      const accActiveTxs = bankTransactions.filter(
+        (t) => t.accountId === targetBankAccount!.id && t.status === 'active'
+      );
+      const { currentBalance } = computeBankAccountBalance(targetBankAccount, accActiveTxs);
+      if (currentBalance < data.amount) {
+        throw new Error(
+          `Saldo insuficiente na conta "${targetBankAccount.name}". Saldo atual: ${formatCurrency(
+            currentBalance
+          )}, valor do Pix: ${formatCurrency(data.amount)}.`
+        );
+      }
+
+      linkedOpId = 'op_pix_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4);
+      linkedBankTransactionId = 'bt_pix_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4);
+    }
+
     const newWithdrawal: CashWithdrawal = {
       ...data,
       id,
       status: 'active',
+      debitFromBankAccount: !!data.debitFromBankAccount && data.paymentMethod === 'pix',
+      bankAccountId: targetBankAccount?.id || data.bankAccountId,
+      bankAccountName: targetBankAccount?.name || data.bankAccountName,
+      bankTransactionId: linkedBankTransactionId,
+      linkedOperationId: linkedOpId,
       createdAt: now,
       updatedAt: now,
     };
 
     try {
+      // 1. Salvar documento de saída de caixa
       await setDoc(doc(db, 'cash_withdrawals', id), sanitizeForFirestore(newWithdrawal));
+
+      // 2. Se debitado de conta bancária, criar transação bancária vinculada e atualizar saldo
+      if (linkedBankTransactionId && targetBankAccount) {
+        const bankTx: BankTransaction = {
+          id: linkedBankTransactionId,
+          accountId: targetBankAccount.id,
+          date: data.date,
+          description: `Saída de Caixa (Pix): ${data.reason.trim()}`,
+          category: 'Saída de Caixa - Fechamento',
+          amount: -Math.abs(data.amount),
+          type: 'pagamento',
+          visibility: 'shared',
+          cashWithdrawalId: id,
+          linkedOperationId: linkedOpId,
+          status: 'active',
+          responsibleName: data.responsibleName || currentUser?.displayName || currentUser?.username || 'Responsável',
+          notes: `Débito automático vinculado à saída de caixa (${data.cashierName}) - Motivo: ${data.reason.trim()}`,
+          createdBy: currentUser?.id || '',
+          createdAt: now,
+        };
+
+        await setDoc(doc(db, 'bank_transactions', linkedBankTransactionId), sanitizeForFirestore(bankTx));
+        await syncAccountBalance(targetBankAccount.id);
+      }
+
       await logAudit(
         'create',
         'closure',
         id,
-        `Saída de caixa registrada: R$ ${data.amount.toFixed(2)} (${data.paymentMethod === 'dinheiro' ? 'Dinheiro Físico' : 'Pix'}) - Motivo: "${data.reason}" (Caixa: ${data.cashierName}, Responsável: ${data.responsibleName})`
+        `Saída de caixa registrada: R$ ${data.amount.toFixed(2)} (${
+          data.paymentMethod === 'dinheiro' ? 'Dinheiro Físico' : 'Pix'
+        }${targetBankAccount ? ` - Debitado de: ${targetBankAccount.name}` : ''}) - Motivo: "${data.reason}" (Caixa: ${
+          data.cashierName
+        }, Responsável: ${data.responsibleName})`
       );
       return id;
     } catch (err) {
@@ -540,6 +661,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     const now = new Date().toISOString();
     try {
+      // 1. Cancelar a saída de caixa
       await updateDoc(doc(db, 'cash_withdrawals', id), {
         status: 'cancelled',
         cancellationReason: reason.trim(),
@@ -548,11 +670,32 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         updatedAt: now,
       });
 
+      // 2. Se possuía débito bancário vinculado, estornar a transação bancária automaticamente
+      if (item.debitFromBankAccount && item.bankTransactionId) {
+        try {
+          await updateDoc(doc(db, 'bank_transactions', item.bankTransactionId), {
+            status: 'cancelled',
+            cancellationReason: `Estorno por cancelamento de saída de caixa: ${reason.trim()}`,
+            cancelledBy: currentUser?.displayName || currentUser?.username || 'admin',
+            cancelledAt: now,
+            updatedAt: now,
+          });
+
+          if (item.bankAccountId) {
+            await syncAccountBalance(item.bankAccountId);
+          }
+        } catch (txErr) {
+          console.warn('Aviso ao estornar transação bancária vinculada:', txErr);
+        }
+      }
+
       await logAudit(
         'cancel',
         'closure',
         id,
-        `Cancelamento de saída de caixa: R$ ${item.amount.toFixed(2)} (${item.paymentMethod.toUpperCase()}) - Motivo: "${reason.trim()}" (Responsável: ${currentUser?.displayName || currentUser?.username})`
+        `Cancelamento de saída de caixa: R$ ${item.amount.toFixed(2)} (${item.paymentMethod.toUpperCase()}${
+          item.debitFromBankAccount ? ' com estorno bancário' : ''
+        }) - Motivo: "${reason.trim()}" (Responsável: ${currentUser?.displayName || currentUser?.username})`
       );
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `cash_withdrawals/${id}`);
@@ -1240,12 +1383,16 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const id = 'acc_' + Date.now();
     const now = new Date().toISOString();
     const initialBalance = Number(data.initialBalance || 0);
+    const isPrivate = data.visibility === 'private';
 
     const newAccount: BankAccount = {
       ...data,
       id,
       initialBalance,
       currentBalance: initialBalance,
+      visibility: isPrivate ? 'private' : 'shared',
+      ownerUid: currentUser?.id || 'anon',
+      ownerUsername: currentUser?.username || currentUser?.displayName || 'Proprietário',
       createdAt: now,
       updatedAt: now,
     };
@@ -1257,7 +1404,9 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         'create',
         'bank_account',
         id,
-        `Conta bancária "${data.name}" (${data.bankName}) cadastrada com saldo inicial de R$ ${initialBalance.toFixed(2)}`
+        `Conta bancária ${isPrivate ? 'PRIVADA' : 'compartilhada'} "${data.name}" (${data.bankName}) cadastrada com saldo inicial de R$ ${initialBalance.toFixed(2)}${
+          isPrivate ? ` (Proprietário: ${currentUser?.displayName || currentUser?.username})` : ''
+        }`
       );
 
       return id;
@@ -1269,6 +1418,11 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
   // 10. UPDATE BANK ACCOUNT
   const updateBankAccount = async (id: string, data: Partial<BankAccount>): Promise<void> => {
     const now = new Date().toISOString();
+    const existing = bankAccounts.find((a) => a.id === id);
+    if (existing?.visibility === 'private' && existing.ownerUid !== currentUser?.id) {
+      throw new Error('Acesso negado: esta conta bancária privada pertence exclusivamente a outro usuário.');
+    }
+
     try {
       const accRef = doc(db, 'bank_accounts', id);
       await updateDoc(accRef, sanitizeForFirestore({
@@ -1284,13 +1438,20 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   // 10b. DEACTIVATE BANK ACCOUNT (PRESERVES HISTORICAL TRANSACTIONS, AUDIT AND STATEMENTS)
   const deactivateBankAccount = async (id: string, reason?: string): Promise<void> => {
-    const hasAdminPermission = isAdmin || currentUser?.role === 'admin';
-    if (!hasAdminPermission) {
-      throw new Error('Apenas administradores têm permissão para desativar contas bancárias.');
-    }
-
     const acc = bankAccounts.find((a) => a.id === id);
     if (!acc) throw new Error('Conta bancária não encontrada.');
+
+    // Proteção de privacidade: conta privada só pode ser gerenciada pelo proprietário
+    if (acc.visibility === 'private') {
+      if (acc.ownerUid !== currentUser?.id) {
+        throw new Error('Acesso negado: você não tem permissão para desativar a conta privada de outro usuário.');
+      }
+    } else {
+      const hasAdminPermission = isAdmin || currentUser?.role === 'admin';
+      if (!hasAdminPermission) {
+        throw new Error('Apenas administradores têm permissão para desativar contas bancárias compartilhadas.');
+      }
+    }
 
     // 1. Balance must be exactly zero before deactivation
     const { currentBalance } = computeBankAccountBalance(acc, bankTransactions);
@@ -1337,7 +1498,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         'update',
         'bank_account',
         id,
-        `Conta bancária "${acc.name}" (${acc.bankName} - ${acc.accountNumberMasked}) desativada com sucesso. Extrato e histórico financeiro preservados.${
+        `Conta bancária ${acc.visibility === 'private' ? 'PRIVADA ' : ''}"${acc.name}" (${acc.bankName} - ${acc.accountNumberMasked}) desativada com sucesso. Extrato e histórico financeiro preservados.${
           reason ? ` Motivo: ${reason}` : ''
         }`
       );
@@ -1348,13 +1509,19 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   // 10c. REACTIVATE BANK ACCOUNT
   const reactivateBankAccount = async (id: string): Promise<void> => {
-    const hasAdminPermission = isAdmin || currentUser?.role === 'admin';
-    if (!hasAdminPermission) {
-      throw new Error('Apenas administradores têm permissão para reativar contas bancárias.');
-    }
-
     const acc = bankAccounts.find((a) => a.id === id);
     if (!acc) throw new Error('Conta bancária não encontrada.');
+
+    if (acc.visibility === 'private') {
+      if (acc.ownerUid !== currentUser?.id) {
+        throw new Error('Acesso negado: você não tem permissão para reativar a conta privada de outro usuário.');
+      }
+    } else {
+      const hasAdminPermission = isAdmin || currentUser?.role === 'admin';
+      if (!hasAdminPermission) {
+        throw new Error('Apenas administradores têm permissão para reativar contas bancárias compartilhadas.');
+      }
+    }
 
     const now = new Date().toISOString();
     try {
@@ -1371,7 +1538,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         'update',
         'bank_account',
         id,
-        `Conta bancária "${acc.name}" (${acc.bankName} - ${acc.accountNumberMasked}) reativada com sucesso.`
+        `Conta bancária ${acc.visibility === 'private' ? 'PRIVADA ' : ''}"${acc.name}" (${acc.bankName} - ${acc.accountNumberMasked}) reativada com sucesso.`
       );
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `bank_accounts/${id}`);
@@ -1380,13 +1547,19 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   // 10d. DELETE BANK ACCOUNT (ONLY ALLOWED IF NO TRANSACTIONS AND ZERO BALANCE)
   const deleteBankAccount = async (id: string, reason?: string): Promise<void> => {
-    const hasAdminPermission = isAdmin || currentUser?.role === 'admin';
-    if (!hasAdminPermission) {
-      throw new Error('Apenas administradores têm permissão para excluir contas bancárias.');
-    }
-
     const acc = bankAccounts.find((a) => a.id === id);
     if (!acc) throw new Error('Conta bancária não encontrada.');
+
+    if (acc.visibility === 'private') {
+      if (acc.ownerUid !== currentUser?.id) {
+        throw new Error('Acesso negado: você não tem permissão para excluir a conta privada de outro usuário.');
+      }
+    } else {
+      const hasAdminPermission = isAdmin || currentUser?.role === 'admin';
+      if (!hasAdminPermission) {
+        throw new Error('Apenas administradores têm permissão para excluir contas bancárias compartilhadas.');
+      }
+    }
 
     // 1. Balance must be zero
     const { currentBalance } = computeBankAccountBalance(acc, bankTransactions);
@@ -1437,7 +1610,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         'delete',
         'bank_account',
         id,
-        `Conta bancária "${acc.name}" (${acc.bankName} - ${acc.accountNumberMasked}) excluída definitivamente.${
+        `Conta bancária ${acc.visibility === 'private' ? 'PRIVADA ' : ''}"${acc.name}" (${acc.bankName} - ${acc.accountNumberMasked}) excluída definitivamente.${
           reason ? ` Motivo: ${reason}` : ''
         }`
       );
@@ -1453,6 +1626,15 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (!data.amount || data.amount === 0) {
       throw new Error('O valor da movimentação deve ser maior que zero.');
     }
+
+    const acc = bankAccounts.find((a) => a.id === data.accountId);
+    if (!acc) throw new Error('Conta bancária não encontrada.');
+
+    const isAccPrivate = acc.visibility === 'private';
+    if (isAccPrivate && acc.ownerUid !== currentUser?.id) {
+      throw new Error('Acesso negado: movimentação em conta privada de outro usuário não é permitida.');
+    }
+
     const id = 'bt_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4);
     const now = new Date().toISOString();
     const responsible = currentUser?.displayName || currentUser?.username || 'Responsável';
@@ -1460,6 +1642,8 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const newTrans: BankTransaction = {
       ...data,
       id,
+      visibility: isAccPrivate ? 'private' : 'shared',
+      ownerUid: isAccPrivate ? acc.ownerUid : undefined,
       status: 'active',
       responsibleName: data.responsibleName || responsible,
       createdBy: currentUser?.id || '',
@@ -1696,6 +1880,24 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
       throw new Error('Conta bancária de destino não encontrada.');
     }
 
+    const fromIsPrivate = fromAcc.visibility === 'private';
+    const toIsPrivate = toAcc.visibility === 'private';
+
+    if (fromIsPrivate && fromAcc.ownerUid !== currentUser?.id) {
+      throw new Error('Acesso negado: a conta privada de origem pertence a outro usuário.');
+    }
+    if (toIsPrivate && toAcc.ownerUid !== currentUser?.id) {
+      throw new Error('Acesso negado: a conta privada de destino pertence a outro usuário.');
+    }
+    if (fromIsPrivate && !toIsPrivate) {
+      throw new Error('Não é permitida a transferência entre contas privadas e contas compartilhadas da empresa.');
+    }
+    if (!fromIsPrivate && toIsPrivate) {
+      throw new Error('Não é permitida a transferência entre contas compartilhadas da empresa e contas privadas.');
+    }
+
+    const isPrivateTransfer = fromIsPrivate && toIsPrivate;
+
     // Validate available balance to prevent negative balance
     const fromBalanceDetails = computeBankAccountBalance(fromAcc, bankTransactions);
     if (fromBalanceDetails.currentBalance < amount) {
@@ -1723,6 +1925,8 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         category: 'Transferência entre contas',
         amount: -Math.abs(amount),
         type: 'transferencia_saida',
+        visibility: isPrivateTransfer ? 'private' : 'shared',
+        ownerUid: isPrivateTransfer ? currentUser?.id : undefined,
         relatedAccountId: toId,
         relatedAccountName: toName,
         relatedTransferId: transferId,
@@ -1743,6 +1947,8 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         category: 'Transferência entre contas',
         amount: Math.abs(amount),
         type: 'transferencia_entrada',
+        visibility: isPrivateTransfer ? 'private' : 'shared',
+        ownerUid: isPrivateTransfer ? currentUser?.id : undefined,
         relatedAccountId: fromId,
         relatedAccountName: fromName,
         relatedTransferId: transferId,
@@ -1879,7 +2085,139 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
-  // 15. USER ROLE MANAGEMENT (ADMIN ONLY)
+  // 15. NOTEPAD NOTES (BLOCO DE NOTAS & REVISÃO POSTERIOR)
+  const createNotepadNote = async (data: {
+    title: string;
+    content: string;
+    category: NotepadCategory;
+    priority: NotepadPriority;
+    targetDate?: string;
+    isPinned?: boolean;
+    status?: NotepadStatus;
+  }): Promise<string> => {
+    const id = 'np_' + Date.now();
+    const now = new Date().toISOString();
+
+    const newNote: NotepadNote = {
+      id,
+      title: data.title.trim(),
+      content: data.content.trim(),
+      category: data.category || 'geral',
+      priority: data.priority || 'media',
+      status: data.status || 'pendente',
+      isPinned: !!data.isPinned,
+      targetDate: data.targetDate || '',
+      authorUid: currentUser?.id || '',
+      authorName: currentUser?.displayName || currentUser?.username || 'Usuário',
+      authorRole: currentUser?.role || 'employee',
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    try {
+      await setDoc(doc(db, 'notepad_notes', id), sanitizeForFirestore(newNote));
+      await logAudit(
+        'create',
+        'notepad_note',
+        id,
+        `Nova anotação no bloco de notas: "${newNote.title}" (${newNote.category.toUpperCase()} / Prioridade: ${newNote.priority})`
+      );
+      return id;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `notepad_notes/${id}`);
+      throw error;
+    }
+  };
+
+  const updateNotepadNote = async (id: string, data: Partial<NotepadNote>): Promise<void> => {
+    const now = new Date().toISOString();
+    try {
+      const noteRef = doc(db, 'notepad_notes', id);
+      const cleanData = sanitizeForFirestore({
+        ...data,
+        updatedAt: now,
+      });
+      await updateDoc(noteRef, cleanData);
+      await logAudit('update', 'notepad_note', id, `Anotação "${id}" atualizada no bloco de notas.`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `notepad_notes/${id}`);
+      throw error;
+    }
+  };
+
+  const deleteNotepadNote = async (id: string, reason?: string): Promise<void> => {
+    try {
+      const noteRef = doc(db, 'notepad_notes', id);
+      await deleteDoc(noteRef);
+      await logAudit(
+        'delete',
+        'notepad_note',
+        id,
+        `Anotação "${id}" excluída do bloco de notas. ${reason ? `Motivo: ${reason}` : ''}`
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `notepad_notes/${id}`);
+      throw error;
+    }
+  };
+
+  const reviewNotepadNote = async (
+    id: string,
+    reviewNotes?: string,
+    newStatus: NotepadStatus = 'revisado'
+  ): Promise<void> => {
+    const now = new Date().toISOString();
+    try {
+      const noteRef = doc(db, 'notepad_notes', id);
+      const isPending = newStatus === 'pendente';
+      const updateData = {
+        status: newStatus,
+        reviewedAt: isPending ? null : now,
+        reviewedByUid: isPending ? null : (currentUser?.id || ''),
+        reviewedByName: isPending ? null : (currentUser?.displayName || currentUser?.username || 'Gestor'),
+        reviewNotes: isPending ? '' : (reviewNotes?.trim() || 'Anotação revisada e verificada.'),
+        updatedAt: now,
+      };
+
+      await updateDoc(noteRef, sanitizeForFirestore(updateData));
+      await logAudit(
+        'review',
+        'notepad_note',
+        id,
+        `Anotação "${id}" marcada como ${newStatus.toUpperCase()} por ${currentUser?.displayName || currentUser?.username}. Parecer: ${reviewNotes || 'Sem observações adicionais'}`
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `notepad_notes/${id}`);
+      throw error;
+    }
+  };
+
+  const toggleNotepadNotePin = async (id: string): Promise<void> => {
+    const now = new Date().toISOString();
+    try {
+      const noteRef = doc(db, 'notepad_notes', id);
+      const snap = await getDoc(noteRef);
+      if (!snap.exists()) return;
+      const current = snap.data() as NotepadNote;
+      const nextPinned = !current.isPinned;
+
+      await updateDoc(noteRef, {
+        isPinned: nextPinned,
+        updatedAt: now,
+      });
+      await logAudit(
+        'update',
+        'notepad_note',
+        id,
+        `Anotação "${id}" ${nextPinned ? 'fixada no topo' : 'desafixada'} do bloco de notas.`
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `notepad_notes/${id}`);
+      throw error;
+    }
+  };
+
+  // 16. USER ROLE MANAGEMENT (ADMIN ONLY)
   const updateUserRole = async (userId: string, role: UserRole): Promise<void> => {
     if (!isAdmin) throw new Error('Apenas administradores podem alterar permissões de usuários.');
     const now = new Date().toISOString();
@@ -1952,6 +2290,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         bankTransactions,
         receivables,
         calendarNotes,
+        notepadNotes,
         auditLogs,
         systemUsers,
         loading,
@@ -1990,6 +2329,11 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         createCalendarNote,
         toggleCalendarNoteStatus,
         deleteCalendarNote,
+        createNotepadNote,
+        updateNotepadNote,
+        deleteNotepadNote,
+        reviewNotepadNote,
+        toggleNotepadNotePin,
         clearAuditHistory,
         updateUserRole,
         refreshAll,

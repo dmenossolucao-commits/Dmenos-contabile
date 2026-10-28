@@ -118,13 +118,14 @@ export const ReportsView: React.FC = () => {
       };
     }
 
-    // Consolidado
+    // Consolidado da empresa (apenas contas compartilhadas)
     const filteredCls = closures.filter((c) => c.date >= startDate && c.date <= endDate);
     const filteredExp = expenses.filter((e) => e.date >= startDate && e.date <= endDate);
     const filteredVales = vales.filter((v) => v.date >= startDate && v.date <= endDate);
+    const sharedAccountsOnly = bankAccounts.filter((a) => a.visibility !== 'private');
 
     return {
-      doc: generateConsolidatedReportPDF(periodTitle, filteredCls, filteredExp, filteredVales, bankAccounts),
+      doc: generateConsolidatedReportPDF(periodTitle, filteredCls, filteredExp, filteredVales, sharedAccountsOnly),
       filename: `Relatorio_Consolidado_${periodTitle.replace(/\s+/g, '_')}.pdf`,
       title: `Relatório Consolidado - ${periodTitle}`,
     };
@@ -324,7 +325,7 @@ export const ReportsView: React.FC = () => {
               >
                 {bankAccounts.map((a) => (
                   <option key={a.id} value={a.id}>
-                    {a.name} ({a.bankName}){a.status === 'inactive' ? ' [Inativa]' : ''}
+                    {a.visibility === 'private' ? '[PRIVADA] ' : ''}{a.name} ({a.bankName}){a.status === 'inactive' ? ' [Inativa]' : ''}
                   </option>
                 ))}
               </select>

@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { FinanceProvider } from './context/FinanceContext';
+import { FinanceProvider, useFinance } from './context/FinanceContext';
 import { testConnection } from './firebase';
 
 import { Dashboard } from './components/Dashboard';
@@ -14,6 +14,7 @@ import { ExpensesValesView } from './components/ExpensesValesView';
 import { BankAccountsView } from './components/BankAccountsView';
 import { HistoryView } from './components/HistoryView';
 import { CalendarView } from './components/CalendarView';
+import { NotepadView } from './components/NotepadView';
 import { ReportsView } from './components/ReportsView';
 import { UsersSecurityView } from './components/UsersSecurityView';
 import { AuthModal } from './components/AuthModal';
@@ -33,11 +34,13 @@ import {
   ShieldCheck,
   Menu,
   X,
-  WifiOff
+  WifiOff,
+  NotebookPen
 } from 'lucide-react';
 
 function MainLayout() {
   const { currentUser, role, isAdmin, permissions, loading, signOutApp } = useAuth();
+  const { notepadNotes } = useFinance();
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
@@ -47,6 +50,10 @@ function MainLayout() {
   const [openExpenseModal, setOpenExpenseModal] = useState(false);
   const [openValeModal, setOpenValeModal] = useState(false);
   const [openBankTransModal, setOpenBankTransModal] = useState(false);
+
+  const pendingNotesCount = useMemo(() => {
+    return (notepadNotes || []).filter((n) => n.status === 'pendente').length;
+  }, [notepadNotes]);
 
   useEffect(() => {
     testConnection();
@@ -65,7 +72,7 @@ function MainLayout() {
 
   // Filter navigation items by role and permissions
   const navItems = useMemo(() => {
-    const list = [];
+    const list: Array<{ id: string; label: string; icon: any; badge?: number }> = [];
     const p = permissions || {};
 
     if (p.canViewDashboard !== false) {
@@ -86,6 +93,13 @@ function MainLayout() {
     if (p.canManageCalendar) {
       list.push({ id: 'calendario', label: 'Calendário & Lembretes', icon: Calendar });
     }
+    // Bloco de Notas para anotação e revisão posterior
+    list.push({
+      id: 'bloco_notas',
+      label: 'Bloco de Notas & Revisão',
+      icon: NotebookPen,
+      badge: pendingNotesCount,
+    });
     if (p.canViewReports) {
       list.push({ id: 'relatorios', label: 'Relatórios & PDF', icon: FileText });
     }
@@ -94,7 +108,7 @@ function MainLayout() {
     }
 
     return list;
-  }, [permissions, isAdmin]);
+  }, [permissions, isAdmin, pendingNotesCount]);
 
   // Ensure user cannot stay on an unauthorized tab
   useEffect(() => {
@@ -159,14 +173,21 @@ function MainLayout() {
               <button
                 key={item.id}
                 onClick={() => setActiveTab(item.id)}
-                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
                   active
                     ? 'bg-emerald-800 text-amber-300 shadow-sm border border-emerald-700/60'
                     : 'text-emerald-100/80 hover:bg-emerald-900/60 hover:text-white'
                 }`}
               >
-                <Icon className={`w-4 h-4 ${active ? 'text-amber-300' : 'text-emerald-300/70'}`} />
-                <span>{item.label}</span>
+                <div className="flex items-center gap-3">
+                  <Icon className={`w-4 h-4 ${active ? 'text-amber-300' : 'text-emerald-300/70'}`} />
+                  <span>{item.label}</span>
+                </div>
+                {item.badge !== undefined && item.badge > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-black bg-amber-400 text-emerald-950 animate-pulse">
+                    {item.badge}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -288,14 +309,21 @@ function MainLayout() {
                         setActiveTab(item.id);
                         setIsMobileMenuOpen(false);
                       }}
-                      className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-xl text-xs font-bold transition ${
+                      className={`w-full flex items-center justify-between px-3.5 py-3 rounded-xl text-xs font-bold transition ${
                         active
                           ? 'bg-emerald-800 text-amber-300'
                           : 'text-slate-300 hover:bg-emerald-900/60'
                       }`}
                     >
-                      <Icon className="w-4 h-4" />
-                      <span>{item.label}</span>
+                      <div className="flex items-center gap-3">
+                        <Icon className="w-4 h-4" />
+                        <span>{item.label}</span>
+                      </div>
+                      {item.badge !== undefined && item.badge > 0 && (
+                        <span className="px-1.5 py-0.5 rounded-full text-[10px] font-black bg-amber-400 text-emerald-950">
+                          {item.badge}
+                        </span>
+                      )}
                     </button>
                   );
                 })}
@@ -367,6 +395,10 @@ function MainLayout() {
 
           {activeTab === 'calendario' && permissions?.canManageCalendar && (
             <CalendarView />
+          )}
+
+          {activeTab === 'bloco_notas' && (
+            <NotepadView />
           )}
 
           {activeTab === 'relatorios' && permissions?.canViewReports && (

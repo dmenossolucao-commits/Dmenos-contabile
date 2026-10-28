@@ -26,7 +26,8 @@ import {
   BellRing,
   Barcode,
   Tag,
-  UserCheck
+  UserCheck,
+  NotebookPen
 } from 'lucide-react';
 import { getCategoryBadge } from './ExpensesValesView';
 
@@ -55,8 +56,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const bankAccounts = Array.isArray(finance.bankAccounts) ? finance.bankAccounts : [];
   const bankTransactions = Array.isArray(finance.bankTransactions) ? finance.bankTransactions : [];
   const calendarNotes = Array.isArray(finance.calendarNotes) ? finance.calendarNotes : [];
+  const notepadNotes = Array.isArray(finance.notepadNotes) ? finance.notepadNotes : [];
   const categories = Array.isArray(finance.categories) ? finance.categories : [];
   const { currentUser, isAdmin } = useAuth();
+
+  const pendingNotepadCount = useMemo(() => {
+    return notepadNotes.filter((n) => n.status === 'pendente').length;
+  }, [notepadNotes]);
 
   const [period, setPeriod] = useState<PeriodFilter>('month');
   const [dashboardCategoryTab, setDashboardCategoryTab] = useState<'despesas' | 'vales'>('despesas');
@@ -169,18 +175,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
   }, [vales]);
 
   const totalSaldoBancario = useMemo(() => {
-    return bankAccounts.reduce((acc, a) => acc + (Number(a?.currentBalance) || 0), 0);
+    return bankAccounts
+      .filter((a) => a?.visibility !== 'private')
+      .reduce((acc, a) => acc + (Number(a?.currentBalance) || 0), 0);
   }, [bankAccounts]);
 
   const entradasBancariasPeriodo = useMemo(() => {
     return periodTransactions
-      .filter((t) => (Number(t?.amount) || 0) > 0 && t?.type !== 'transferencia_entrada')
+      .filter((t) => t?.visibility !== 'private' && (Number(t?.amount) || 0) > 0 && t?.type !== 'transferencia_entrada')
       .reduce((acc, t) => acc + (Number(t?.amount) || 0), 0);
   }, [periodTransactions]);
 
   const saidasBancariasPeriodo = useMemo(() => {
     return periodTransactions
-      .filter((t) => (Number(t?.amount) || 0) < 0 && t?.type !== 'transferencia_saida')
+      .filter((t) => t?.visibility !== 'private' && (Number(t?.amount) || 0) < 0 && t?.type !== 'transferencia_saida')
       .reduce((acc, t) => acc + Math.abs(Number(t?.amount) || 0), 0);
   }, [periodTransactions]);
 
@@ -307,6 +315,34 @@ export const Dashboard: React.FC<DashboardProps> = ({
           >
             <Barcode className="w-4 h-4 text-amber-300" />
             <span>Ver Boletos</span>
+          </button>
+        </div>
+      )}
+
+      {/* Pending Notepad Notes Alert Banner */}
+      {pendingNotepadCount > 0 && (
+        <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-amber-500 text-white shrink-0">
+              <NotebookPen className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-xs font-bold text-amber-950 flex items-center gap-2">
+                Anotações Pendentes de Revisão
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500 text-white animate-pulse">
+                  {pendingNotepadCount}
+                </span>
+              </h3>
+              <p className="text-[11px] text-amber-800">
+                Há anotações ou ocorrências aguardando parecer e conferência da gestão no Bloco de Notas.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => onNavigate('bloco_notas')}
+            className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shrink-0 cursor-pointer transition shadow-2xs self-start sm:self-auto"
+          >
+            Abrir Bloco de Notas
           </button>
         </div>
       )}
@@ -884,6 +920,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
           >
             <Landmark className="w-3.5 h-3.5 text-blue-400" />
             <span>Movimentação Bancária</span>
+          </button>
+
+          <button
+            onClick={() => onNavigate('bloco_notas')}
+            className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-medium text-xs transition border border-slate-700 flex items-center gap-1.5 cursor-pointer"
+          >
+            <NotebookPen className="w-3.5 h-3.5 text-amber-400" />
+            <span>Bloco de Notas</span>
           </button>
 
           <button

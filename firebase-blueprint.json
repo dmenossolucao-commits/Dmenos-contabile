@@ -229,6 +229,30 @@
         "updatedAt": { "type": "string" }
       },
       "required": ["date", "time", "cashierName", "reason", "amount", "paymentMethod", "responsibleName", "status"]
+    },
+    "NotepadNote": {
+      "title": "NotepadNote",
+      "description": "Bloco de notas para anotações operacionais e revisão posterior da gestão",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "category": { "type": "string", "enum": ["geral", "aviso_caixa", "pendencia", "lembrete", "revisao_gerente", "fornecedor", "financeiro", "manutencao"] },
+        "priority": { "type": "string", "enum": ["baixa", "media", "alta"] },
+        "status": { "type": "string", "enum": ["pendente", "em_analise", "revisado", "arquivado"] },
+        "isPinned": { "type": "boolean" },
+        "targetDate": { "type": "string" },
+        "authorUid": { "type": "string" },
+        "authorName": { "type": "string" },
+        "authorRole": { "type": "string" },
+        "reviewedAt": { "type": "string" },
+        "reviewedByUid": { "type": "string" },
+        "reviewedByName": { "type": "string" },
+        "reviewNotes": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["title", "content", "category", "priority", "status", "authorUid", "authorName", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -271,6 +295,10 @@
     "/calendar_notes/{noteId}": {
       "schema": "CalendarNote",
       "description": "Anotações e lembretes financeiros do calendário"
+    },
+    "/notepad_notes/{notepadNoteId}": {
+      "schema": "NotepadNote",
+      "description": "Anotações do bloco de notas e ocorrências para revisão posterior"
     },
     "/audit_logs/{logId}": {
       "schema": "AuditLog",

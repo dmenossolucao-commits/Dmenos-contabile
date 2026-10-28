@@ -33,7 +33,8 @@ import {
   Eye,
   Check,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Lock
 } from 'lucide-react';
 
 interface BankAccountsViewProps {
@@ -130,15 +131,34 @@ export const BankAccountsView: React.FC<BankAccountsViewProps> = ({
     return bankAccounts[0] || null;
   }, [activeBankAccount, bankAccounts]);
 
-  // Consolidated Bank Balance State & Calculation
+  // Consolidated Bank Balance State & Calculation (Contas Compartilhadas)
   const [isConsolidatedCardExpanded, setIsConsolidatedCardExpanded] = useState(false);
+  const [isPrivateCardExpanded, setIsPrivateCardExpanded] = useState(false);
 
+  // Separação rigorosa: Contas Compartilhadas vs Contas Privadas
+  const sharedBankAccounts = useMemo(() => {
+    return bankAccounts.filter((a) => a.visibility !== 'private');
+  }, [bankAccounts]);
+
+  const privateBankAccounts = useMemo(() => {
+    return bankAccounts.filter((a) => a.visibility === 'private' && a.ownerUid === currentUser?.id);
+  }, [bankAccounts, currentUser]);
+
+  // O Saldo Total Bancário Consolidado soma ESTRITAMENTE as contas compartilhadas da empresa
   const totalConsolidatedBankBalance = useMemo(() => {
-    return bankAccounts.reduce((acc, a) => {
+    return sharedBankAccounts.reduce((acc, a) => {
       const details = computeBankAccountBalance(a, bankTransactions);
       return acc + details.currentBalance;
     }, 0);
-  }, [bankAccounts, bankTransactions]);
+  }, [sharedBankAccounts, bankTransactions]);
+
+  // Saldo exclusivo das contas privadas do usuário autenticado
+  const totalPrivateBankBalance = useMemo(() => {
+    return privateBankAccounts.reduce((acc, a) => {
+      const details = computeBankAccountBalance(a, bankTransactions);
+      return acc + details.currentBalance;
+    }, 0);
+  }, [privateBankAccounts, bankTransactions]);
 
   const displayedBankAccounts = useMemo(() => {
     if (accountStatusFilter === 'active') return bankAccounts.filter((a) => a.status === 'active');
@@ -150,6 +170,7 @@ export const BankAccountsView: React.FC<BankAccountsViewProps> = ({
   const [accName, setAccName] = useState('');
   const [accBankName, setAccBankName] = useState('Banco do Brasil');
   const [accType, setAccType] = useState<BankAccountType>('corrente');
+  const [accVisibility, setAccVisibility] = useState<'shared' | 'private'>('shared');
   const [accAgency, setAccAgency] = useState('');
   const [accNumber, setAccNumber] = useState('');
   const [accInitialBalanceStr, setAccInitialBalanceStr] = useState('0,00');
@@ -460,14 +481,18 @@ export const BankAccountsView: React.FC<BankAccountsViewProps> = ({
         initialBalance: initBalance,
         initialBalanceDate: accInitialDate,
         status: 'active',
+        visibility: accVisibility,
         notes: accNotes.trim() || '',
       });
 
-      showToast(`Conta bancária "${accName.trim()}" cadastrada com sucesso!`);
+      showToast(
+        `Conta bancária ${accVisibility === 'private' ? 'privada ' : ''}"${accName.trim()}" cadastrada com sucesso!`
+      );
       setIsAccountModalOpen(false);
       setAccName('');
       setAccBankName('Banco do Brasil');
       setAccType('corrente');
+      setAccVisibility('shared');
       setAccAgency('');
       setAccNumber('');
       setAccInitialBalanceStr('0,00');
@@ -798,7 +823,7 @@ export const BankAccountsView: React.FC<BankAccountsViewProps> = ({
                   Saldo Total Bancário
                 </span>
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800">
-                  {bankAccounts.length} conta{bankAccounts.length === 1 ? '' : 's'}
+                  {sharedBankAccounts.length} conta{sharedBankAccounts.length === 1 ? '' : 's'}
                 </span>
               </div>
               <div className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight mt-0.5 truncate">
@@ -830,7 +855,7 @@ export const BankAccountsView: React.FC<BankAccountsViewProps> = ({
           </div>
         </button>
 
-        {/* Área expansível com a lista dos saldos individuais de cada banco */}
+        {/* Área expansível com a lista dos saldos individuais de cada banco compartilhado */}
         {isConsolidatedCardExpanded && (
           <div className="border-t border-slate-100 bg-slate-50/60 p-4 sm:p-5 pt-3 animate-in fade-in duration-150">
             <div className="flex items-center justify-between mb-2.5">
@@ -838,13 +863,13 @@ export const BankAccountsView: React.FC<BankAccountsViewProps> = ({
                 Discriminação por Conta Bancária
               </span>
               <span className="text-[11px] text-slate-500 font-medium">
-                {bankAccounts.length} conta{bankAccounts.length === 1 ? '' : 's'} cadastrada{bankAccounts.length === 1 ? '' : 's'}
+                {sharedBankAccounts.length} conta{sharedBankAccounts.length === 1 ? '' : 's'} cadastrada{sharedBankAccounts.length === 1 ? '' : 's'}
               </span>
             </div>
 
-            {bankAccounts.length > 0 ? (
+            {sharedBankAccounts.length > 0 ? (
               <div className="space-y-2">
-                {bankAccounts.map((acc) => {
+                {sharedBankAccounts.map((acc) => {
                   const accDetails = computeBankAccountBalance(acc, bankTransactions);
                   const isCurrent = currentAccount?.id === acc.id;
 
@@ -927,6 +952,146 @@ export const BankAccountsView: React.FC<BankAccountsViewProps> = ({
         )}
       </div>
 
+      {/* CARTÃO DE SALDO DAS CONTAS PRIVADAS (EXCLUSIVO DO PROPRIETÁRIO) */}
+      {privateBankAccounts.length > 0 && (
+        <div className="bg-gradient-to-r from-purple-50/70 to-indigo-50/70 rounded-2xl border border-purple-200 shadow-xs overflow-hidden transition-all duration-200">
+          <button
+            type="button"
+            onClick={() => setIsPrivateCardExpanded((prev) => !prev)}
+            className="w-full text-left p-4 sm:p-5 flex items-center justify-between gap-3 hover:bg-purple-100/40 transition cursor-pointer select-none"
+            aria-expanded={isPrivateCardExpanded}
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="p-2.5 sm:p-3 rounded-xl bg-purple-100 text-purple-700 border border-purple-200 shrink-0">
+                <Lock className="w-5 h-5 sm:w-6 sm:h-6" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-purple-900">
+                    Minhas Contas Privadas
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-200 text-purple-900 border border-purple-300 flex items-center gap-1">
+                    <Lock className="w-2.5 h-2.5" /> PRIVADA ({privateBankAccounts.length})
+                  </span>
+                </div>
+                <div className="text-2xl sm:text-3xl font-black text-purple-950 tracking-tight mt-0.5 truncate">
+                  {formatCurrency(totalPrivateBankBalance)}
+                </div>
+                <p className="text-[11px] sm:text-xs font-medium text-purple-700 flex items-center gap-1 mt-0.5">
+                  {isPrivateCardExpanded ? (
+                    <>
+                      <span>Toque para recolher os detalhes</span>
+                      <ChevronUp className="w-3.5 h-3.5" />
+                    </>
+                  ) : (
+                    <>
+                      <span>Toque para ver os saldos privados por conta</span>
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    </>
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <div className="p-2 rounded-xl bg-purple-100/80 text-purple-700 shrink-0 self-center">
+              {isPrivateCardExpanded ? (
+                <ChevronUp className="w-5 h-5" />
+              ) : (
+                <ChevronDown className="w-5 h-5" />
+              )}
+            </div>
+          </button>
+
+          {isPrivateCardExpanded && (
+            <div className="border-t border-purple-200/80 bg-white/80 p-4 sm:p-5 pt-3 animate-in fade-in duration-150">
+              <div className="flex items-center justify-between mb-2.5">
+                <span className="text-[10px] uppercase font-bold text-purple-600 tracking-wider">
+                  Discriminação das Contas Privadas (Isolamento Real)
+                </span>
+                <span className="text-[11px] text-purple-800 font-medium">
+                  {privateBankAccounts.length} conta{privateBankAccounts.length === 1 ? '' : 's'} privada{privateBankAccounts.length === 1 ? '' : 's'}
+                </span>
+              </div>
+
+              <div className="space-y-2">
+                {privateBankAccounts.map((acc) => {
+                  const accDetails = computeBankAccountBalance(acc, bankTransactions);
+                  const isCurrent = currentAccount?.id === acc.id;
+
+                  return (
+                    <div
+                      key={acc.id}
+                      onClick={() => handleViewStatement(acc)}
+                      className={`p-3 rounded-xl border transition flex flex-col sm:flex-row sm:items-center justify-between gap-2 cursor-pointer ${
+                        isCurrent
+                          ? 'bg-purple-50/70 border-purple-500 shadow-xs ring-1 ring-purple-500/20'
+                          : 'bg-white border-purple-200 hover:border-purple-300'
+                      }`}
+                      title="Toque para ver o extrato privado desta conta"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="w-8 h-8 rounded-lg bg-purple-100 text-purple-800 flex items-center justify-center shrink-0 font-bold text-xs border border-purple-200">
+                          <Lock className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0 truncate">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-bold text-slate-900 text-xs sm:text-sm truncate">
+                              {acc.name}
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-300 flex items-center gap-0.5">
+                              <Lock className="w-2.5 h-2.5" /> PRIVADA
+                            </span>
+                            <span className="text-[10px] px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded font-medium">
+                              {acc.bankName}
+                            </span>
+                          </div>
+                          {(acc.agency || acc.accountNumberMasked) && (
+                            <span className="text-[11px] text-slate-500 block truncate mt-0.5">
+                              {acc.agency ? `Agência: ${acc.agency} ` : ''}
+                              {acc.accountNumberMasked && acc.accountNumberMasked !== 'Sem número'
+                                ? `| Conta: ${acc.accountNumberMasked}`
+                                : ''}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between sm:justify-end gap-3 self-stretch sm:self-auto pt-1 sm:pt-0 border-t sm:border-t-0 border-purple-100">
+                        <div className="text-right">
+                          <span className="text-[10px] text-slate-400 block sm:hidden">Saldo atual:</span>
+                          <span className="font-black text-purple-950 text-sm sm:text-base">
+                            {formatCurrency(accDetails.currentBalance)}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => handleViewStatement(acc, e)}
+                          className="text-[11px] font-bold text-purple-800 hover:text-purple-950 underline px-2 py-1 rounded hover:bg-purple-100 transition"
+                        >
+                          Ver extrato →
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="mt-3 pt-2.5 border-t border-purple-200/80 flex items-center justify-between text-[11px] text-purple-800">
+                <span>Soma das contas privadas: <strong>{formatCurrency(totalPrivateBankBalance)}</strong></span>
+                <button
+                  type="button"
+                  onClick={() => setIsPrivateCardExpanded(false)}
+                  className="text-purple-700 hover:text-purple-950 font-semibold cursor-pointer flex items-center gap-1"
+                >
+                  <span>Recolher</span>
+                  <ChevronUp className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* 1. CARDS PRINCIPAIS DE CONTAS BANCÁRIAS */}
       {/* Filtro de Status das Contas */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -1002,10 +1167,18 @@ export const BankAccountsView: React.FC<BankAccountsViewProps> = ({
                   <div className="flex justify-between items-start">
                     <div>
                       <div className="flex items-center gap-1.5 flex-wrap">
+                        {acc.visibility === 'private' && (
+                          <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md inline-flex items-center gap-1 text-purple-800 bg-purple-100 border border-purple-300">
+                            <Lock className="w-3 h-3 text-purple-700" />
+                            PRIVADA
+                          </span>
+                        )}
                         <span
                           className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md inline-block ${
                             acc.status === 'inactive'
                               ? 'text-rose-700 bg-rose-50 border border-rose-200'
+                              : acc.visibility === 'private'
+                              ? 'text-purple-900 bg-purple-50'
                               : 'text-emerald-800 bg-emerald-50'
                           }`}
                         >
@@ -1649,6 +1822,64 @@ export const BankAccountsView: React.FC<BankAccountsViewProps> = ({
                   </div>
                 )}
 
+                {/* Modalidade da Conta: Compartilhada ou Privada */}
+                <div className="space-y-1.5">
+                  <label className="block font-semibold text-slate-700">
+                    Modalidade da Conta *
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setAccVisibility('shared')}
+                      className={`p-3 rounded-xl border text-left transition cursor-pointer flex flex-col justify-between ${
+                        accVisibility === 'shared'
+                          ? 'bg-blue-50/80 border-blue-600 text-blue-950 ring-2 ring-blue-500/20 shadow-2xs'
+                          : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-xs">Compartilhada</span>
+                        <Landmark className={`w-3.5 h-3.5 ${accVisibility === 'shared' ? 'text-blue-700' : 'text-slate-400'}`} />
+                      </div>
+                      <span className="text-[10px] text-slate-500 mt-1 block leading-tight">
+                        Padrão da empresa. Visível para autorizados e soma no saldo geral.
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setAccVisibility('private')}
+                      className={`p-3 rounded-xl border text-left transition cursor-pointer flex flex-col justify-between ${
+                        accVisibility === 'private'
+                          ? 'bg-purple-50/80 border-purple-600 text-purple-950 ring-2 ring-purple-500/20 shadow-2xs'
+                          : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-xs flex items-center gap-1 text-purple-950">
+                          <Lock className="w-3 h-3 text-purple-700" />
+                          Privada
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-200 text-purple-900">
+                          Exclusiva
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-slate-500 mt-1 block leading-tight">
+                        Visível exclusivamente por você. Totalmente isolada do saldo da empresa.
+                      </span>
+                    </button>
+                  </div>
+
+                  {accVisibility === 'private' && (
+                    <div className="p-2.5 rounded-xl bg-purple-50 border border-purple-200 text-[11px] text-purple-900 flex items-start gap-2 animate-in fade-in">
+                      <Lock className="w-3.5 h-3.5 shrink-0 text-purple-700 mt-0.5" />
+                      <div>
+                        <strong>Privacidade Real:</strong> Esta conta será vinculada ao seu usuário ({currentUser?.displayName || currentUser?.username}). Nenhum outro usuário ou administrador terá acesso ao saldo ou extrato desta conta.
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">
                     Nome Identificador da Conta *
@@ -2227,14 +2458,26 @@ export const BankAccountsView: React.FC<BankAccountsViewProps> = ({
                   <label className="block font-semibold text-slate-700 mb-1">Conta de Origem (Saída) *</label>
                   <select
                     value={trfFromId}
-                    onChange={(e) => setTrfFromId(e.target.value)}
+                    onChange={(e) => {
+                      const newFromId = e.target.value;
+                      setTrfFromId(newFromId);
+                      const fromAcc = bankAccounts.find((a) => a.id === newFromId);
+                      const isPriv = fromAcc?.visibility === 'private';
+                      const validDests = bankAccounts.filter(
+                        (a) =>
+                          a.status === 'active' &&
+                          a.id !== newFromId &&
+                          (isPriv ? a.visibility === 'private' && a.ownerUid === currentUser?.id : a.visibility !== 'private')
+                      );
+                      setTrfToId(validDests[0]?.id || '');
+                    }}
                     className="w-full p-2.5 rounded-xl border border-slate-200 bg-white font-medium text-slate-800 text-xs"
                   >
                     {bankAccounts
                       .filter((a) => a.status === 'active')
                       .map((a) => (
                         <option key={a.id} value={a.id}>
-                          {a.name} ({a.bankName}) — Saldo: {formatCurrency(a.currentBalance)}
+                          {a.visibility === 'private' ? '[PRIVADA] ' : ''}{a.name} ({a.bankName}) — Saldo: {formatCurrency(a.currentBalance)}
                         </option>
                       ))}
                   </select>
@@ -2245,8 +2488,16 @@ export const BankAccountsView: React.FC<BankAccountsViewProps> = ({
                     const bal = srcAcc ? computeBankAccountBalance(srcAcc, bankTransactions).currentBalance : 0;
                     return (
                       <div className="mt-1 flex items-center justify-between text-[11px] text-slate-500 px-1">
-                        <span>Saldo disponível:</span>
-                        <span className="font-bold text-slate-800">{formatCurrency(bal)}</span>
+                        <span>
+                          {srcAcc?.visibility === 'private' ? (
+                            <span className="text-purple-700 font-semibold flex items-center gap-1">
+                              <Lock className="w-3 h-3" /> Conta Privada
+                            </span>
+                          ) : (
+                            <span>Conta Compartilhada da Loja</span>
+                          )}
+                        </span>
+                        <span>Saldo disponível: <strong className="text-slate-800">{formatCurrency(bal)}</strong></span>
                       </div>
                     );
                   })()}
@@ -2255,20 +2506,38 @@ export const BankAccountsView: React.FC<BankAccountsViewProps> = ({
                 {/* Conta de Destino */}
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">Conta de Destino (Entrada) *</label>
-                  <select
-                    value={trfToId}
-                    onChange={(e) => setTrfToId(e.target.value)}
-                    className="w-full p-2.5 rounded-xl border border-slate-200 bg-white font-medium text-slate-800 text-xs"
-                  >
-                    <option value="">-- Selecione a conta de destino --</option>
-                    {bankAccounts
-                      .filter((a) => a.status === 'active' && a.id !== trfFromId)
-                      .map((a) => (
-                        <option key={a.id} value={a.id}>
-                          {a.name} ({a.bankName}) — Saldo Atual: {formatCurrency(a.currentBalance)}
-                        </option>
-                      ))}
-                  </select>
+                  {(() => {
+                    const srcAcc = bankAccounts.find((a) => a.id === trfFromId);
+                    const isPriv = srcAcc?.visibility === 'private';
+                    const eligibleDestinations = bankAccounts.filter(
+                      (a) =>
+                        a.status === 'active' &&
+                        a.id !== trfFromId &&
+                        (isPriv ? a.visibility === 'private' && a.ownerUid === currentUser?.id : a.visibility !== 'private')
+                    );
+
+                    return (
+                      <>
+                        <select
+                          value={trfToId}
+                          onChange={(e) => setTrfToId(e.target.value)}
+                          className="w-full p-2.5 rounded-xl border border-slate-200 bg-white font-medium text-slate-800 text-xs"
+                        >
+                          <option value="">-- Selecione a conta de destino --</option>
+                          {eligibleDestinations.map((a) => (
+                            <option key={a.id} value={a.id}>
+                              {a.visibility === 'private' ? '[PRIVADA] ' : ''}{a.name} ({a.bankName}) — Saldo Atual: {formatCurrency(a.currentBalance)}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="text-[10px] text-slate-500 mt-1">
+                          {isPriv
+                            ? 'Transferências de contas privadas são permitidas exclusivamente para outras contas privadas de sua titularidade.'
+                            : 'Transferência entre contas compartilhadas da empresa.'}
+                        </p>
+                      </>
+                    );
+                  })()}
                 </div>
 
                 {/* Valor e Data - 1 coluna no celular, 2 em telas maiores */}
